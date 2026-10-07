@@ -193,6 +193,33 @@ impl NodeServer {
             NetworkMessage::SyncChunk { .. } => {
                 // Respons potongan data diterima
             }
+            NetworkMessage::TxSubmit(record) => {
+                let res = match self.engine.write() {
+                    Ok(mut eng) => eng.submit_transaction(&record),
+                    Err(e) => Err(axiom_engine::error::EngineError::IoError(std::io::Error::other(
+                        format!("Engine lock error: {e}"),
+                    ))),
+                };
+
+                let reply = match res {
+                    Ok(offset) => NetworkMessage::TxResult {
+                        success: true,
+                        offset,
+                        message: "Transaction committed".to_string(),
+                    },
+                    Err(e) => NetworkMessage::TxResult {
+                        success: false,
+                        offset: 0,
+                        message: format!("{e}"),
+                    },
+                };
+                let reply_packet = encode_message(&reply)?;
+                stream.write_all(&reply_packet)?;
+                stream.flush()?;
+            }
+            NetworkMessage::TxResult { .. } => {
+                // Konfirmasi hasil transaksi diterima
+            }
         }
 
         Ok(())

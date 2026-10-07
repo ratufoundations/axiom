@@ -7,10 +7,12 @@ use axiom_consensus::proposal::{SegmentProposal, PROPOSAL_SIGNING_SIZE};
 use axiom_consensus::vote::Vote;
 use axiom_primitives::crypto::{AccountId, Hash, Signature};
 use axiom_primitives::framing::{FrameHeader, HEADER_SIZE};
+use axiom_primitives::record::{MutationRecord, RECORD_SIZE};
 
 use crate::error::NetworkError;
 use crate::message::{
-    NetworkMessage, MSG_CERTIFICATE, MSG_PROPOSAL, MSG_SYNC_CHUNK, MSG_SYNC_REQ, MSG_VOTE,
+    NetworkMessage, MSG_CERTIFICATE, MSG_PROPOSAL, MSG_SYNC_CHUNK, MSG_SYNC_REQ, MSG_TX_RESULT,
+    MSG_TX_SUBMIT, MSG_VOTE,
 };
 
 /// Versi default frame transmisi jaringan.
@@ -68,6 +70,21 @@ pub fn encode_message(msg: &NetworkMessage) -> Result<Vec<u8>, NetworkError> {
             let data_len = data.len() as u32;
             payload.extend_from_slice(&data_len.to_le_bytes());
             payload.extend_from_slice(data);
+        }
+        NetworkMessage::TxSubmit(record) => {
+            payload.extend_from_slice(&record.to_bytes());
+        }
+        NetworkMessage::TxResult {
+            success,
+            offset,
+            message,
+        } => {
+            payload.push(if *success { 1 } else { 0 });
+            payload.extend_from_slice(&offset.to_le_bytes());
+            let msg_bytes = message.as_bytes();
+            let msg_len = msg_bytes.len() as u32;
+            payload.extend_from_slice(&msg_len.to_le_bytes());
+            payload.extend_from_slice(msg_bytes);
         }
     }
 
@@ -261,6 +278,42 @@ pub fn decode_message(bytes: &[u8]) -> Result<NetworkMessage, NetworkError> {
                 segment_index,
                 offset,
                 data: data_slice.to_vec(),
+            })
+        }
+        MSG_TX_SUBMIT => {
+            if body.len() != RECORD_SIZE {
+                return Err(NetworkError::MalformedPayload);
+            }
+            let mut record_buf = [0u8; RECORD_SIZE];
+            record_buf.copy_from_slice(body);
+            let record = MutationRecord::from_bytes(&record_buf);
+            Ok(NetworkMessage::TxSubmit(record))
+        }
+        MSG_TX_RESULT => {
+            if body.len() < 13 {
+                return Err(NetworkError::MalformedPayload);
+            }
+            let success = body[0] != 0;
+            let mut off_bytes = [0u8; 8];
+            off_bytes.copy_from_slice(&body[1..9]);
+            let offset = u64::from_le_bytes(off_bytes);
+
+            let mut len_bytes = [0u8; 4];
+            len_bytes.copy_from_slice(&body[9..13]);
+            let msg_len = u32::from_le_bytes(len_bytes) as usize;
+
+            let msg_slice = &body[13..];
+            if msg_slice.len() != msg_len {
+                return Err(NetworkError::MalformedPayload);
+            }
+
+            let message = String::from_utf8(msg_slice.to_vec())
+                .map_err(|_| NetworkError::MalformedPayload)?;
+
+            Ok(NetworkMessage::TxResult {
+                success,
+                offset,
+                message,
             })
         }
         unknown => Err(NetworkError::UnknownMessageType(unknown)),

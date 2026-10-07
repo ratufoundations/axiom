@@ -86,6 +86,31 @@ mod tests {
         let enc_sync_chunk = encode_message(&msg_sync_chunk).expect("Encode sync chunk");
         let dec_sync_chunk = decode_message(&enc_sync_chunk).expect("Decode sync chunk");
         assert_eq!(msg_sync_chunk, dec_sync_chunk);
+
+        // 6. TxSubmit Message
+        let record = axiom_primitives::record::MutationRecord {
+            epoch: 1,
+            sequence_number: 1,
+            record_kind: axiom_primitives::record::RECORD_KIND_TRANSFER,
+            sender: val1,
+            recipient: val2,
+            amount: axiom_primitives::value::AxmValue::from_atomic(10_000_000_000),
+            signature: sig1,
+        };
+        let msg_tx = NetworkMessage::TxSubmit(record);
+        let enc_tx = encode_message(&msg_tx).expect("Encode tx submit");
+        let dec_tx = decode_message(&enc_tx).expect("Decode tx submit");
+        assert_eq!(msg_tx, dec_tx);
+
+        // 7. TxResult Message
+        let msg_res = NetworkMessage::TxResult {
+            success: true,
+            offset: 1024,
+            message: "Committed".to_string(),
+        };
+        let enc_res = encode_message(&msg_res).expect("Encode tx result");
+        let dec_res = decode_message(&enc_res).expect("Decode tx result");
+        assert_eq!(msg_res, dec_res);
     }
 
     #[test]

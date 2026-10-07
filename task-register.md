@@ -11,4 +11,5 @@ Dokumen cetak biru dan pelacak tugas rekayasa sistem untuk proyek blockchain mod
 | TR-05 | Engine | Mesin orkestrasi dan validasi transaksi (kriptografi, storage, in-memory index, dan pengarsipan). | None | Tervalidasi |
 | TR-06 | Consensus | Penegakan aturan komitmen jaringan, validasi finalitas blok, algoritma konsensus modular, dan integritas state commitment. | None | Tervalidasi |
 | TR-07 | Network | Protokol komunikasi data P2P, serialization framing, transport abstraction layer, penanganan koneksi peer, dan propagasi pesan. | None | Tervalidasi |
-| TR-08 | Node | Integrasi runtime simpul biner utama (axiom-node), loop server TCP P2P, pipeline handler, dan graceful shutdown. | TR-01 - TR-07 | Dalam Review |
+| TR-08 | Node | Integrasi runtime simpul biner utama (axiom-node), loop server TCP P2P, pipeline handler, dan graceful shutdown. | TR-01 - TR-07 | Tervalidasi |
+| TR-09 | CLI | Antarmuka baris perintah (CLI) dompet, deterministik decimal-to-atomic parsing, manajemen kunci, dan pengiriman mutasi TCP. | TR-01, TR-07, TR-08 | Dalam Review |

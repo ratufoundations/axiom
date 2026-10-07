@@ -1,0 +1,15 @@
+[package]
+name = "axiom-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axiom-primitives = { path = "../../crates/axiom-primitives" }
+axiom-network = { path = "../../crates/axiom-network" }
+ed25519-dalek = { version = "2.1", default-features = false }
+
+[dev-dependencies]
+axiom-engine = { path = "../../crates/axiom-engine" }
+
+[lints]
+workspace = true
