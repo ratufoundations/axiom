@@ -4,3 +4,14 @@ members = [
     "bin/*",
     "crates/*",
 ]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+float_arithmetic = "deny"
+float_cmp = "deny"
+float_cmp_const = "deny"
+suboptimal_flops = "deny"
+imprecise_flops = "deny"
+
