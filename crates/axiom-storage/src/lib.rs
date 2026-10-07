@@ -163,6 +163,43 @@ mod tests {
         let read_footer = reader.read_footer().expect("Read footer should succeed");
         assert_eq!(footer, read_footer);
 
+        // Verifikasi stream_records pada segmen bersegel
+        let stream = reader.stream_records().expect("Stream records");
+        let streamed: Vec<(u64, MutationRecord)> =
+            stream.collect::<Result<Vec<_>, _>>().expect("Stream collected");
+        assert_eq!(streamed.len(), 2);
+        assert_eq!(streamed[0].0, SEGMENT_HEADER_SIZE as u64);
+        assert_eq!(streamed[0].1, rec1);
+        assert_eq!(streamed[1].0, (SEGMENT_HEADER_SIZE + RECORD_SIZE) as u64);
+        assert_eq!(streamed[1].1, rec2);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_stream_records_unsealed_segment() {
+        let path = unique_test_path("stream_unsealed");
+        let mut writer =
+            SegmentWriter::create(&path, 1, 1, 0).expect("Writer creation should succeed");
+
+        let rec1 = sample_record(1, 100);
+        let rec2 = sample_record(2, 200);
+        let rec3 = sample_record(3, 300);
+
+        writer.append_record(&rec1).expect("Append rec1");
+        writer.append_record(&rec2).expect("Append rec2");
+        writer.append_record(&rec3).expect("Append rec3");
+
+        let reader = SegmentReader::open(&path).expect("Reader should open");
+        let stream = reader.stream_records().expect("Stream records");
+        let streamed: Vec<(u64, MutationRecord)> =
+            stream.collect::<Result<Vec<_>, _>>().expect("Stream collected");
+
+        assert_eq!(streamed.len(), 3);
+        assert_eq!(streamed[0].1, rec1);
+        assert_eq!(streamed[1].1, rec2);
+        assert_eq!(streamed[2].1, rec3);
+
         let _ = fs::remove_file(&path);
     }
 }

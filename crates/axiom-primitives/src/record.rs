@@ -35,6 +35,9 @@ pub struct MutationRecord {
 }
 
 impl MutationRecord {
+    /// Ukuran pasti satu MutationRecord dalam byte (161 byte).
+    pub const RECORD_SIZE: usize = RECORD_SIZE;
+
     /// Serialisasi record ke dalam representasi biner tepat 161 byte (Little-Endian).
     pub fn to_bytes(&self) -> [u8; RECORD_SIZE] {
         let mut buf = [0u8; RECORD_SIZE];

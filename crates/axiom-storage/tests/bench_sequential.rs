@@ -11,7 +11,7 @@ use axiom_primitives::{
 use axiom_storage::{
     error::StorageError,
     reader::SegmentReader,
-    segment::{MAX_SEGMENT_SIZE, SEGMENT_FOOTER_SIZE, SEGMENT_HEADER_SIZE},
+    segment::MAX_SEGMENT_SIZE,
     writer::SegmentWriter,
 };
 
@@ -99,7 +99,7 @@ fn bench_sequential_128mb_lifecycle() {
     assert!(final_file_size <= MAX_SEGMENT_SIZE);
 
     // -------------------------------------------------------------------------
-    // FASE 3: Pemindaian Sekuensial Ulang (Cold Boot Replay Rebuild)
+    // FASE 3: Pemindaian Sekuensial Ulang Terbuffer (Buffered Streaming Replay)
     // -------------------------------------------------------------------------
     let start_replay = Instant::now();
     let mut reader = SegmentReader::open(&file_path).expect("Gagal membuka reader segmen");
@@ -108,15 +108,13 @@ fn bench_sequential_128mb_lifecycle() {
         .expect("Gagal membaca catatan kaki segmen");
     assert_eq!(read_footer.total_records, footer.total_records);
 
-    let mut scanned_records: u64 = 0;
-    let mut current_offset: u64 = SEGMENT_HEADER_SIZE as u64;
-    let end_offset = final_file_size - (SEGMENT_FOOTER_SIZE as u64);
+    let stream = reader
+        .stream_records()
+        .expect("Gagal inisialisasi stream buffer");
 
-    while current_offset + 161 <= end_offset {
-        let _ = reader
-            .read_record_at(current_offset)
-            .expect("Gagal membaca record mutasi");
-        current_offset += 161;
+    let mut scanned_records: u64 = 0;
+    for item in stream {
+        let (_offset, _record) = item.expect("Gagal membaca record via buffer stream");
         scanned_records += 1;
     }
 
