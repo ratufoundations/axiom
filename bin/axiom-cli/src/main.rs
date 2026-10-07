@@ -61,6 +61,7 @@ fn run_cli(args: &[String]) -> Result<(), CliError> {
             wallet.save_to_file(Path::new(out_path))?;
 
             println!("[axiom-cli] Kunci dompet berhasil dibuat.");
+            println!("Account ID: 0x{}", bytes_to_hex(wallet.account_id().as_bytes()));
             println!(
                 "Alamat Akun (AccountId): 0x{}",
                 bytes_to_hex(wallet.account_id().as_bytes())
@@ -72,6 +73,7 @@ fn run_cli(args: &[String]) -> Result<(), CliError> {
             let key_path = find_arg(args, "--key").ok_or(CliError::MissingArgument("--key"))?;
             let wallet = Wallet::load_from_file(Path::new(key_path))?;
 
+            println!("Account ID: 0x{}", bytes_to_hex(wallet.account_id().as_bytes()));
             println!(
                 "Alamat Akun (AccountId): 0x{}",
                 bytes_to_hex(wallet.account_id().as_bytes())

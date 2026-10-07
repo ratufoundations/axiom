@@ -12,7 +12,6 @@ pub mod server;
 use std::fs;
 use std::sync::mpsc;
 use std::sync::{Arc, RwLock};
-use std::thread;
 
 use axiom_consensus::validator_set::{ValidatorInfo, ValidatorSet};
 use axiom_engine::coordinator::EngineCoordinator;
@@ -78,23 +77,15 @@ fn main() {
 
     // 6. Jalankan Server Jaringan P2P
     let server = NodeServer::new(config.clone(), engine, peer_table);
-    let (shutdown_tx, shutdown_rx) = mpsc::channel();
+    let (_shutdown_tx, shutdown_rx) = mpsc::channel();
 
-    let server_handle = thread::spawn(move || {
-        println!(
-            "[axiom-node] Server P2P aktif mendengarkan di {}",
-            config.listen_addr
-        );
-        if let Err(e) = server.start(shutdown_rx) {
-            eprintln!("[axiom-node ERROR] Server loop berhenti dengan galat: {e}");
-        }
-    });
-
-    println!("[axiom-node] Simpul berhasil berjalan. Mengirimkan sinyal shutdown...");
-    let _ = shutdown_tx.send(());
-    let _ = server_handle.join();
-
-    println!("[axiom-node] Shutdown simpul selesai secara aman dan deterministik.");
+    println!(
+        "[axiom-node] Server P2P aktif mendengarkan di {}",
+        config.listen_addr
+    );
+    if let Err(e) = server.start(shutdown_rx) {
+        eprintln!("[axiom-node ERROR] Server loop berhenti dengan galat: {e}");
+    }
 }
 
 #[cfg(test)]
@@ -104,6 +95,7 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
     use std::path::PathBuf;
     use std::sync::mpsc;
+    use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use axiom_consensus::proposal::SegmentProposal;

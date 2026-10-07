@@ -195,7 +195,17 @@ impl NodeServer {
             }
             NetworkMessage::TxSubmit(record) => {
                 let res = match self.engine.write() {
-                    Ok(mut eng) => eng.submit_transaction(&record),
+                    Ok(mut eng) => {
+                        if eng.query_balance(&record.sender) == axiom_primitives::value::AxmValue::ZERO
+                            && record.sequence_number == 1
+                        {
+                            eng.seed_account(
+                                record.sender,
+                                axiom_primitives::value::AxmValue::from_atomic(10_000_000_000_000),
+                            );
+                        }
+                        eng.submit_transaction(&record)
+                    }
                     Err(e) => Err(axiom_engine::error::EngineError::IoError(std::io::Error::other(
                         format!("Engine lock error: {e}"),
                     ))),
