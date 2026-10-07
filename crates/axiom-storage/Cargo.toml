@@ -8,3 +8,6 @@ axiom-primitives = { path = "../axiom-primitives" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
