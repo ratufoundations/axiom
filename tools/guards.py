@@ -69,6 +69,28 @@ def run_compiler_checks():
     run_cmd(["cargo", "check", "--workspace"], "Kompilasi 'cargo check' gagal.")
     run_cmd(["cargo", "clippy", "--workspace", "--", "-D", "warnings"], "Pemeriksaan 'cargo clippy' menemukan peringatan/galat.")
 
+def verify_logging_discipline():
+    log("Memverifikasi ketaatan dokumentasi logging...")
+    logs_dir = ROOT_DIR / "logs"
+    
+    if not logs_dir.exists() or not logs_dir.is_dir():
+        fail("Direktori 'logs/' tidak ditemukan. Seluruh agen wajib mencatat progres pada direktori 'logs/'.")
+    
+    log_files = list(logs_dir.glob("*.log"))
+    if not log_files:
+        fail("Tidak ditemukan berkas catatan (*.log) di direktori 'logs/'. Agen wajib mendokumentasikan log sebelum menyelesaikan pekerjaan.")
+    
+    # Periksa apakah ada berkas log yang berisi penanda wajib
+    required_tags = ["[PRIORITAS]", "[DETAIL_MIKRO]", "[EKSEKUSI_UJI]", "[STATUS_AKTUAL]"]
+    latest_log = max(log_files, key=lambda f: f.stat().st_mtime)
+    content = latest_log.read_text(encoding="utf-8")
+    
+    missing_tags = [tag for tag in required_tags if tag not in content]
+    if missing_tags:
+        fail(f"Berkas log '{latest_log.name}' tidak memenuhi struktur standar. Tag yang hilang: {', '.join(missing_tags)}")
+        
+    log(f"Disiplin logging terverifikasi: '{latest_log.name}' memuat seluruh audit detail wajib.")
+
 def get_git_status() -> str:
     res = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT_DIR, capture_output=True, text=True)
     if res.returncode != 0:
@@ -93,8 +115,10 @@ def main():
     log("=== MEMULAI VERIFIKASI STANDAR AXIOM ===")
     scan_rust_source_code()
     run_compiler_checks()
+    verify_logging_discipline()
     git_commit_and_push()
     log("=== SELURUH VERIFIKASI LOLOS ===")
 
 if __name__ == "__main__":
     main()
+
