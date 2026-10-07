@@ -41,6 +41,7 @@ fn print_usage() {
     println!("  axiom-cli keygen --out <path>");
     println!("  axiom-cli inspect --key <path>");
     println!("  axiom-cli transfer --key <path> --to <hex> --amount <axm> --epoch <u64> --seq <u64> --node <ip:port>");
+    println!("  axiom-cli status --ipc <socket_path>");
 }
 
 fn run_cli(args: &[String]) -> Result<(), CliError> {
@@ -136,6 +137,12 @@ fn run_cli(args: &[String]) -> Result<(), CliError> {
             println!("Offset Fisik Disk: {offset} byte");
             Ok(())
         }
+        "status" => {
+            let ipc_path = find_arg(args, "--ipc").ok_or(CliError::MissingArgument("--ipc"))?;
+            query_node_status(Path::new(ipc_path))
+                .map_err(|e| CliError::NodeRejectedTransaction(e.to_string()))?;
+            Ok(())
+        }
         unknown => Err(CliError::UnknownCommand(unknown.to_string())),
     }
 }
@@ -148,6 +155,79 @@ fn find_arg<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+/// Menginspeksi metrik simpul secara instan melalui Unix Domain Socket.
+#[cfg(unix)]
+pub fn query_node_status(socket_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = UnixStream::connect(socket_path)?;
+
+    // Kirim request 8-byte
+    let req = [b'A', b'X', b'T', b'I', 1u8, 0u8, 0u8, 0u8];
+    stream.write_all(&req)?;
+
+    // Terima 128-byte snapshot
+    let mut resp = [0u8; 128];
+    stream.read_exact(&mut resp)?;
+
+    if &resp[0..4] != b"AXTR" {
+        return Err("Magic balasan IPC tidak valid".into());
+    }
+
+    let mut epoch_bytes = [0u8; 8];
+    epoch_bytes.copy_from_slice(&resp[8..16]);
+    let epoch = u64::from_le_bytes(epoch_bytes);
+
+    let mut seg_idx_bytes = [0u8; 4];
+    seg_idx_bytes.copy_from_slice(&resp[16..20]);
+    let seg_idx = u32::from_le_bytes(seg_idx_bytes);
+
+    let mut disk_offset_bytes = [0u8; 8];
+    disk_offset_bytes.copy_from_slice(&resp[20..28]);
+    let disk_offset = u64::from_le_bytes(disk_offset_bytes);
+
+    let mut tx_total_bytes = [0u8; 8];
+    tx_total_bytes.copy_from_slice(&resp[28..36]);
+    let tx_total = u64::from_le_bytes(tx_total_bytes);
+
+    let mut tps_bytes = [0u8; 4];
+    tps_bytes.copy_from_slice(&resp[36..40]);
+    let tps = u32::from_le_bytes(tps_bytes);
+
+    let mut p50_bytes = [0u8; 4];
+    p50_bytes.copy_from_slice(&resp[40..44]);
+    let p50 = u32::from_le_bytes(p50_bytes);
+
+    let mut p99_bytes = [0u8; 4];
+    p99_bytes.copy_from_slice(&resp[44..48]);
+    let p99 = u32::from_le_bytes(p99_bytes);
+
+    let mut peers_bytes = [0u8; 4];
+    peers_bytes.copy_from_slice(&resp[48..52]);
+    let peers = u32::from_le_bytes(peers_bytes);
+
+    let mut uptime_bytes = [0u8; 8];
+    uptime_bytes.copy_from_slice(&resp[60..68]);
+    let uptime = u64::from_le_bytes(uptime_bytes);
+
+    println!("=== AXIOM NODE TELEMETRY SNAPSHOT ===");
+    println!("Uptime Operasional : {} detik", uptime);
+    println!("Epoch Aktif        : {}", epoch);
+    println!("Segmen Disk Aktif  : Segmen #{}, Offset: {} byte", seg_idx, disk_offset);
+    println!("Transaksi Komit    : {} mutasi", tx_total);
+    println!("Throughput Ingest  : {} TPS", tps);
+    println!("Latensi Disk Commit: p50 = {} µs | p99 = {} µs", p50, p99);
+    println!("Peer Terhubung     : {} simpul", peers);
+    Ok(())
+}
+
+/// Fallback untuk sistem non-Unix.
+#[cfg(not(unix))]
+pub fn query_node_status(_socket_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    Err("Unix Domain Socket IPC is only supported on Unix/Linux systems".into())
 }
 
 #[cfg(test)]

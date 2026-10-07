@@ -32,20 +32,41 @@ pub struct NodeServer {
     pub peer_table: Arc<RwLock<PeerTable>>,
     /// Sertifikat kuorum aktif saat ini yang sedang mengumpulkan suara.
     pub active_certificate: Arc<RwLock<Option<QuorumCertificate>>>,
+    /// Kolektor metrik telemetri simpul bebas-kunci.
+    pub telemetry: Arc<crate::telemetry::NodeTelemetryCollector>,
 }
 
 impl NodeServer {
-    /// Mengonstruksi NodeServer baru.
+    /// Mengonstruksi NodeServer baru dengan kolektor telemetri default.
     pub fn new(
         config: NodeConfig,
         engine: Arc<RwLock<EngineCoordinator>>,
         peer_table: Arc<RwLock<PeerTable>>,
     ) -> Self {
+        Self::with_telemetry(
+            config,
+            engine,
+            peer_table,
+            Arc::new(crate::telemetry::NodeTelemetryCollector::new()),
+        )
+    }
+
+    /// Mengonstruksi NodeServer dengan kolektor telemetri yang ditentukan.
+    pub fn with_telemetry(
+        config: NodeConfig,
+        engine: Arc<RwLock<EngineCoordinator>>,
+        peer_table: Arc<RwLock<PeerTable>>,
+        telemetry: Arc<crate::telemetry::NodeTelemetryCollector>,
+    ) -> Self {
+        telemetry
+            .epoch
+            .store(config.epoch, std::sync::atomic::Ordering::Relaxed);
         Self {
             config,
             engine,
             peer_table,
             active_certificate: Arc::new(RwLock::new(None)),
+            telemetry,
         }
     }
 
@@ -210,6 +231,15 @@ impl NodeServer {
                         format!("Engine lock error: {e}"),
                     ))),
                 };
+
+                if let Ok(offset) = res {
+                    self.telemetry
+                        .total_tx_committed
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.telemetry
+                        .disk_offset
+                        .store(offset, std::sync::atomic::Ordering::Relaxed);
+                }
 
                 let reply = match res {
                     Ok(offset) => NetworkMessage::TxResult {

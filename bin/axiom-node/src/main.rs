@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod server;
+pub mod telemetry;
 
 use std::fs;
 use std::sync::mpsc;
@@ -75,8 +76,17 @@ fn main() {
     // 5. Inisialisasi PeerTable
     let peer_table = Arc::new(RwLock::new(PeerTable::new()));
 
-    // 6. Jalankan Server Jaringan P2P
-    let server = NodeServer::new(config.clone(), engine, peer_table);
+    // 6. Jalankan Server Jaringan P2P dan Telemetri IPC
+    let telemetry = Arc::new(telemetry::NodeTelemetryCollector::new());
+    if let Some(ref ipc_path) = config.ipc_socket {
+        if let Err(e) = telemetry::IpcServer::start(ipc_path, telemetry.clone()) {
+            eprintln!("[axiom-node WARNING] Gagal mengikat UDS telemetri di {ipc_path:?}: {e}");
+        } else {
+            println!("[axiom-node] IPC Telemetri aktif di {:?}", ipc_path);
+        }
+    }
+
+    let server = NodeServer::with_telemetry(config.clone(), engine, peer_table, telemetry);
     let (_shutdown_tx, shutdown_rx) = mpsc::channel();
 
     println!(

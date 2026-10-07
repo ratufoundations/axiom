@@ -19,6 +19,8 @@ pub struct NodeConfig {
     pub epoch: u64,
     /// Kunci privat penandatanganan validator simpul (Ed25519).
     pub validator_key: SigningKey,
+    /// Path berkas Unix Domain Socket untuk telemetri IPC (opsional).
+    pub ipc_socket: Option<PathBuf>,
 }
 
 impl NodeConfig {
@@ -36,6 +38,7 @@ impl NodeConfig {
             listen_addr,
             epoch,
             validator_key,
+            ipc_socket: None,
         }
     }
 
@@ -52,6 +55,7 @@ impl NodeConfig {
             listen_addr,
             epoch: 1,
             validator_key,
+            ipc_socket: None,
         }
     }
 
@@ -69,6 +73,7 @@ impl NodeConfig {
         let mut listen_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9000);
         let mut epoch: u64 = 1;
         let mut seed_byte: u8 = 0x01;
+        let mut ipc_socket: Option<PathBuf> = None;
 
         let args_vec: Vec<String> = args.into_iter().collect();
         let mut i = 0;
@@ -115,8 +120,15 @@ impl NodeConfig {
                         .parse::<u8>()
                         .map_err(|e| format!("Invalid --seed-byte value: {e}"))?;
                 }
+                "--ipc-socket" => {
+                    i = i.checked_add(1).ok_or("Arg index overflow")?;
+                    if i >= args_vec.len() {
+                        return Err("Missing argument for --ipc-socket".to_string());
+                    }
+                    ipc_socket = Some(PathBuf::from(&args_vec[i]));
+                }
                 "--help" | "-h" => {
-                    return Err("Usage: axiom-node [--data-dir PATH] [--archive-dir PATH] [--listen IP:PORT] [--epoch NUM] [--seed-byte U8]".to_string());
+                    return Err("Usage: axiom-node [--data-dir PATH] [--archive-dir PATH] [--listen IP:PORT] [--epoch NUM] [--seed-byte U8] [--ipc-socket PATH]".to_string());
                 }
                 unknown => {
                     return Err(format!("Unknown argument: {unknown}"));
@@ -135,6 +147,7 @@ impl NodeConfig {
             listen_addr,
             epoch,
             validator_key,
+            ipc_socket,
         })
     }
 

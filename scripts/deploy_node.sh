@@ -56,6 +56,7 @@ AXIOM_ARCHIVE_DIR=/var/lib/axiom/archive
 AXIOM_LISTEN_ADDR=0.0.0.0:9001
 AXIOM_EPOCH=1
 AXIOM_SEED_BYTE=11
+AXIOM_IPC_SOCKET=/run/axiom/telemetry.sock
 EOF
     chmod 640 "$CONFIG_DIR/node.env"
     echo "[DEPLOY] Konfigurasi awal dibuat di $CONFIG_DIR/node.env."
@@ -123,7 +124,8 @@ ExecStart=/usr/local/bin/axiom-node \
     --archive-dir ${AXIOM_ARCHIVE_DIR} \
     --listen ${AXIOM_LISTEN_ADDR} \
     --epoch ${AXIOM_EPOCH} \
-    --seed-byte ${AXIOM_SEED_BYTE}
+    --seed-byte ${AXIOM_SEED_BYTE} \
+    --ipc-socket ${AXIOM_IPC_SOCKET}
 
 # Pengalihan stream stdout dan stderr ke berkas terdedikasi
 StandardOutput=append:/var/log/axiom/node.log
@@ -150,7 +152,9 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-ReadWritePaths=/var/lib/axiom /var/log/axiom
+ReadWritePaths=/var/lib/axiom /var/log/axiom /run/axiom
+RuntimeDirectory=axiom
+RuntimeDirectoryMode=0755
 
 [Install]
 WantedBy=multi-user.target
