@@ -143,6 +143,10 @@ def main():
     write_audit_log(task_id, total_files, "Lolos tanpa peringatan.", "Lolos tanpa peringatan.", test_out)
 
     # 6. Git Commit & Push
+    if os.environ.get("CI") == "true":
+        log("Lingkungan CI terdeteksi. Melewati commit & push otomatis.")
+        return
+
     _, status = run_cmd_capture(["git", "status", "--porcelain"])
     if not status:
         log("Tidak ada perubahan berkas untuk dikomit.")
