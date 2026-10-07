@@ -16,6 +16,14 @@ ExecStart=/usr/local/bin/axiom-node \
     --epoch ${AXIOM_EPOCH} \
     --seed-byte ${AXIOM_SEED_BYTE}
 
+# Pengalihan stream stdout dan stderr ke berkas terdedikasi
+StandardOutput=append:/var/log/axiom/node.log
+StandardError=append:/var/log/axiom/node-error.log
+
+# Proteksi rate-limit bawaan unit systemd
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=10000
+
 # Manajemen Sinyal & Siklus Hidup
 KillMode=process
 KillSignal=SIGINT
@@ -36,7 +44,7 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-ReadWritePaths=/var/lib/axiom
+ReadWritePaths=/var/lib/axiom /var/log/axiom
 
 [Install]
 WantedBy=multi-user.target

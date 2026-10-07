@@ -7,7 +7,11 @@ INSTALL_BIN="/usr/local/bin/axiom-node"
 CONFIG_DIR="/etc/axiom"
 DATA_DIR="/var/lib/axiom/data"
 ARCHIVE_DIR="/var/lib/axiom/archive"
+LOG_DIR="/var/log/axiom"
 SYSTEMD_FILE="/etc/systemd/system/axiom-node.service"
+JOURNALD_DROPIN_DIR="/etc/systemd/journald.conf.d"
+JOURNALD_FILE="$JOURNALD_DROPIN_DIR/axiom.conf"
+LOGROTATE_FILE="/etc/logrotate.d/axiom-node"
 
 echo "[DEPLOY] Memulai deployment axiom-node..."
 
@@ -28,10 +32,10 @@ if ! id -u "$NODE_USER" >/dev/null 2>&1; then
     echo "[DEPLOY] Pengguna sistem '$NODE_USER' dibuat."
 fi
 
-# 3. Buat struktur direktori data dan konfigurasi
-mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$ARCHIVE_DIR"
-chown -R "$NODE_USER":"$NODE_GROUP" /var/lib/axiom
-chmod 750 /var/lib/axiom "$DATA_DIR" "$ARCHIVE_DIR"
+# 3. Buat struktur direktori data, arsip, konfigurasi, dan log
+mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$ARCHIVE_DIR" "$LOG_DIR"
+chown -R "$NODE_USER":"$NODE_GROUP" /var/lib/axiom "$LOG_DIR"
+chmod 750 /var/lib/axiom "$DATA_DIR" "$ARCHIVE_DIR" "$LOG_DIR"
 chown -R root:"$NODE_GROUP" "$CONFIG_DIR"
 chmod 750 "$CONFIG_DIR"
 
@@ -57,7 +61,51 @@ EOF
     echo "[DEPLOY] Konfigurasi awal dibuat di $CONFIG_DIR/node.env."
 fi
 
-# 6. Pasang berkas unit service
+# 6. Pasang konfigurasi drop-in journald
+mkdir -p "$JOURNALD_DROPIN_DIR"
+cat << 'EOF' > "$JOURNALD_FILE"
+[Journal]
+# Batas penyimpanan fisik journald di disk (/var/log/journal)
+SystemMaxUse=2G
+SystemKeepFree=5G
+SystemMaxFileSize=256M
+
+# Retensi waktu penyimpanan log
+MaxRetentionSec=1month
+
+# Pembatasan laju entri log per proses (mencegah I/O thrashing saat lonjakan trafik)
+RateLimitIntervalSec=30s
+RateLimitBurst=10000
+EOF
+chmod 644 "$JOURNALD_FILE"
+echo "[DEPLOY] Konfigurasi journald drop-in dipasang di $JOURNALD_FILE."
+
+# 7. Pasang konfigurasi logrotate
+cat << 'EOF' > "$LOGROTATE_FILE"
+/var/log/axiom/*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    create 0640 axiom axiom
+    sharedscripts
+    
+    # Menggunakan copytruncate agar file descriptor simpul tetap valid 
+    # tanpa membutuhkan SIGHUP handler khusus di runtime
+    copytruncate
+
+    # Jalankan pengecekan integritas setelah rotasi
+    postrotate
+        /usr/bin/find /var/log/axiom -type f -name "*.gz" -mtime +14 -delete
+    endscript
+}
+EOF
+chmod 644 "$LOGROTATE_FILE"
+echo "[DEPLOY] Konfigurasi logrotate dipasang di $LOGROTATE_FILE."
+
+# 8. Pasang berkas unit service systemd
 cat << 'EOF' > "$SYSTEMD_FILE"
 [Unit]
 Description=Axiom Deterministic Ledger Node
@@ -77,6 +125,14 @@ ExecStart=/usr/local/bin/axiom-node \
     --epoch ${AXIOM_EPOCH} \
     --seed-byte ${AXIOM_SEED_BYTE}
 
+# Pengalihan stream stdout dan stderr ke berkas terdedikasi
+StandardOutput=append:/var/log/axiom/node.log
+StandardError=append:/var/log/axiom/node-error.log
+
+# Proteksi rate-limit bawaan unit systemd
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=10000
+
 KillMode=process
 KillSignal=SIGINT
 TimeoutStopSec=30
@@ -94,15 +150,17 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-ReadWritePaths=/var/lib/axiom
+ReadWritePaths=/var/lib/axiom /var/log/axiom
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
 chmod 644 "$SYSTEMD_FILE"
+echo "[DEPLOY] Berkas unit systemd dipasang di $SYSTEMD_FILE."
 
-# 7. Muat ulang systemd dan aktifkan layanan
+# 9. Muat ulang daemon, terapkan konfigurasi, dan aktifkan layanan
+systemctl restart systemd-journald || true
 systemctl daemon-reload
 systemctl enable axiom-node.service
 systemctl restart axiom-node.service
