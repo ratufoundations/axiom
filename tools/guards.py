@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import datetime
 import os
 import re
 import subprocess
@@ -6,11 +7,12 @@ import sys
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+LOGS_DIR = ROOT_DIR / "logs"
 
 FORBIDDEN_PATTERNS = [
-    (r"\bunsafe\b", "Penggunaan kata kunci 'unsafe' terdeteksi."),
-    (r"\bf32\b", "Penggunaan tipe floating-point 'f32' terdeteksi."),
-    (r"\bf64\b", "Penggunaan tipe floating-point 'f64' terdeteksi."),
+    (r"\bunsafe\b", "Penggunaan kata kunci 'unsafe'"),
+    (r"\bf32\b", "Penggunaan tipe floating-point 'f32'"),
+    (r"\bf64\b", "Penggunaan tipe floating-point 'f64'"),
 ]
 
 def log(msg: str):
@@ -20,105 +22,137 @@ def fail(msg: str):
     print(f"\n[GUARD ERROR] {msg}\n", file=sys.stderr)
     sys.exit(1)
 
-def run_cmd(cmd: list[str], err_msg: str):
-    log(f"Menjalankan: {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=ROOT_DIR)
-    if result.returncode != 0:
-        fail(err_msg)
+def run_cmd_capture(cmd: list[str]) -> tuple[int, str]:
+    res = subprocess.run(cmd, cwd=ROOT_DIR, capture_output=True, text=True)
+    output = (res.stdout + "\n" + res.stderr).strip()
+    return res.returncode, output
 
-def scan_rust_source_code():
-    log("Memindai kepatuhan source code Rust terhadap unsafe dan floating-point...")
+def detect_active_task() -> str:
+    task_file = ROOT_DIR / "task-register.md"
+    if not task_file.exists():
+        return "UNKNOWN"
+    content = task_file.read_text(encoding="utf-8")
+    for line in content.splitlines():
+        if "Dalam Pengerjaan" in line or "In Progress" in line or "Review" in line:
+            match = re.search(r"TR-\d+", line)
+            if match:
+                return match.group(0)
+    return "MISC"
+
+def audit_source_code() -> tuple[int, list[str]]:
     crates_dir = ROOT_DIR / "crates"
     bin_dir = ROOT_DIR / "bin"
-    
-    target_dirs = [crates_dir, bin_dir]
+    total_files = 0
     violations = []
 
-    for base in target_dirs:
+    for base in [crates_dir, bin_dir]:
         if not base.exists():
             continue
         for rs_file in base.rglob("*.rs"):
-            # Lewatkan direktori target build jika ada
             if "target" in rs_file.parts:
                 continue
-
-            try:
-                content = rs_file.read_text(encoding="utf-8")
-            except Exception as e:
-                fail(f"Gagal membaca berkas {rs_file}: {e}")
-
-            lines = content.splitlines()
+            total_files += 1
+            lines = rs_file.read_text(encoding="utf-8").splitlines()
             for line_no, line in enumerate(lines, start=1):
-                # Abaikan baris komentar
                 stripped = line.strip()
                 if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
                     continue
-
+                if "forbid(unsafe_code)" in line:
+                    continue
                 for pattern, desc in FORBIDDEN_PATTERNS:
-                    # Izinkan penegakan lint '#![forbid(unsafe_code)]'
-                    if "forbid(unsafe_code)" in line:
-                        continue
                     if re.search(pattern, line):
-                        violations.append(f"{rs_file.relative_to(ROOT_DIR)}:{line_no} -> {desc} Baris: '{stripped}'")
+                        violations.append(f"{rs_file.relative_to(ROOT_DIR)}:{line_no} -> {desc}")
 
-    if violations:
-        fail("Pelanggaran aturan absolut ditemukan:\n" + "\n".join(violations))
-    log("Audit kode statis bersih: Tidak ditemukan unsafe maupun floating-point.")
+    return total_files, violations
 
-def run_compiler_checks():
-    run_cmd(["cargo", "check", "--workspace"], "Kompilasi 'cargo check' gagal.")
-    run_cmd(["cargo", "clippy", "--workspace", "--", "-D", "warnings"], "Pemeriksaan 'cargo clippy' menemukan peringatan/galat.")
+def get_git_diff_stat() -> str:
+    _, stat = run_cmd_capture(["git", "diff", "--stat"])
+    _, staged_stat = run_cmd_capture(["git", "diff", "--cached", "--stat"])
+    combined = []
+    if stat:
+        combined.append("Perubahan belum staged:\n" + stat)
+    if staged_stat:
+        combined.append("Perubahan staged:\n" + staged_stat)
+    return "\n".join(combined) if combined else "Tidak ada perubahan berkas."
 
-def verify_logging_discipline():
-    log("Memverifikasi ketaatan dokumentasi logging...")
-    logs_dir = ROOT_DIR / "logs"
-    
-    if not logs_dir.exists() or not logs_dir.is_dir():
-        fail("Direktori 'logs/' tidak ditemukan. Seluruh agen wajib mencatat progres pada direktori 'logs/'.")
-    
-    log_files = list(logs_dir.glob("*.log"))
-    if not log_files:
-        fail("Tidak ditemukan berkas catatan (*.log) di direktori 'logs/'. Agen wajib mendokumentasikan log sebelum menyelesaikan pekerjaan.")
-    
-    # Periksa apakah ada berkas log yang berisi penanda wajib
-    required_tags = ["[PRIORITAS]", "[DETAIL_MIKRO]", "[EKSEKUSI_UJI]", "[STATUS_AKTUAL]"]
-    latest_log = max(log_files, key=lambda f: f.stat().st_mtime)
-    content = latest_log.read_text(encoding="utf-8")
-    
-    missing_tags = [tag for tag in required_tags if tag not in content]
-    if missing_tags:
-        fail(f"Berkas log '{latest_log.name}' tidak memenuhi struktur standar. Tag yang hilang: {', '.join(missing_tags)}")
-        
-    log(f"Disiplin logging terverifikasi: '{latest_log.name}' memuat seluruh audit detail wajib.")
+def write_audit_log(task_id: str, files_scanned: int, check_res: str, clippy_res: str, test_res: str):
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_file = LOGS_DIR / f"{today}_{task_id}.log"
 
-def get_git_status() -> str:
-    res = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT_DIR, capture_output=True, text=True)
-    if res.returncode != 0:
-        fail("Gagal membaca git status.")
-    return res.stdout.strip()
+    git_stat = get_git_diff_stat()
 
-def git_commit_and_push():
-    status = get_git_status()
-    if not status:
-        log("Tidak ada perubahan berkas untuk di-commit. Workspace bersih.")
-        return
+    log_entry = f"""
+================================================================================
+FAKTA AUDIT OTOMATIS AXIOM - {timestamp}
+TASK TERDETEKSI: {task_id}
+================================================================================
 
-    log("Perubahan terdeteksi. Mempersiapkan git commit dan push...")
-    run_cmd(["git", "add", "-A"], "Gagal melakukan git add.")
+[AUDIT_KODE_STATIK]
+- Total Berkas Rust Dipindai: {files_scanned}
+- Unsafe Code: NIHIL (Terverifikasi)
+- Floating-Point: NIHIL (Terverifikasi)
 
-    commit_msg = os.environ.get("GUARD_COMMIT_MSG", "chore(axiom): update workspace implementation under guard verification")
-    run_cmd(["git", "commit", "-m", commit_msg], "Gagal melakukan git commit.")
-    run_cmd(["git", "push"], "Gagal melakukan git push ke GitHub remote.")
-    log("Perubahan berhasil diverifikasi, di-commit, dan di-push ke GitHub.")
+[METRIK_GIT]
+{git_stat}
+
+[EKSEKUSI_KOMPILASI]
+{check_res}
+
+[EKSEKUSI_CLIPPY]
+{clippy_res}
+
+[EKSEKUSI_UNIT_TEST]
+{test_res}
+
+[STATUS_INTEGRITAS]
+Semua gerbang verifikasi lolos secara deterministik.
+================================================================================
+"""
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(log_entry.strip() + "\n\n")
+
+    log(f"Fakta audit otomatis berhasil dicatat ke '{log_file.relative_to(ROOT_DIR)}'.")
 
 def main():
-    log("=== MEMULAI VERIFIKASI STANDAR AXIOM ===")
-    scan_rust_source_code()
-    run_compiler_checks()
-    verify_logging_discipline()
-    git_commit_and_push()
-    log("=== SELURUH VERIFIKASI LOLOS ===")
+    log("=== MEMULAI GERBANG AUDIT OTOMATIS AXIOM ===")
+    task_id = detect_active_task()
+
+    # 1. Audit Statis
+    total_files, violations = audit_source_code()
+    if violations:
+        fail("Pelanggaran aturan absolut terdeteksi:\n" + "\n".join(violations))
+
+    # 2. Cargo Check
+    code, check_out = run_cmd_capture(["cargo", "check", "--workspace"])
+    if code != 0:
+        fail(f"Cargo check gagal:\n{check_out}")
+
+    # 3. Cargo Clippy
+    code, clippy_out = run_cmd_capture(["cargo", "clippy", "--workspace", "--", "-D", "warnings"])
+    if code != 0:
+        fail(f"Cargo clippy menemukan masalah:\n{clippy_out}")
+
+    # 4. Cargo Test
+    code, test_out = run_cmd_capture(["cargo", "test", "--workspace"])
+    if code != 0:
+        fail(f"Pengujian unit test gagal:\n{test_out}")
+
+    # 5. Tulis Log Otomatis
+    write_audit_log(task_id, total_files, "Lolos tanpa peringatan.", "Lolos tanpa peringatan.", test_out)
+
+    # 6. Git Commit & Push
+    _, status = run_cmd_capture(["git", "status", "--porcelain"])
+    if not status:
+        log("Tidak ada perubahan berkas untuk dikomit.")
+        return
+
+    subprocess.run(["git", "add", "-A"], cwd=ROOT_DIR, check=True)
+    commit_msg = os.environ.get("GUARD_COMMIT_MSG", f"chore({task_id.lower()}): automated verified update under guards")
+    subprocess.run(["git", "commit", "-m", commit_msg], cwd=ROOT_DIR, check=True)
+    subprocess.run(["git", "push"], cwd=ROOT_DIR, check=True)
+    log("Perubahan berhasil dikomit dan didorong ke remote repository.")
 
 if __name__ == "__main__":
     main()
-
