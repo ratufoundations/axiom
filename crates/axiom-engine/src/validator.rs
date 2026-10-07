@@ -15,15 +15,12 @@ use crate::error::EngineError;
 /// - sender (32 byte)
 /// - recipient (32 byte)
 /// - amount (16 byte)
-pub const SIGNING_PAYLOAD_SIZE: usize = 97;
+pub const SIGNING_PAYLOAD_SIZE: usize = MutationRecord::SIGNING_PAYLOAD_SIZE;
 
-/// Menghasilkan 97 byte payload biner yang wajib ditandatangani oleh akun pengirim.
+/// Menghasilkan 97 byte payload biner yang wajib ditandatangani oleh akun pengirim (RFC-0001 §3.3).
 #[inline]
 pub fn compute_signing_payload(record: &MutationRecord) -> [u8; SIGNING_PAYLOAD_SIZE] {
-    let bytes = record.to_bytes();
-    let mut payload = [0u8; SIGNING_PAYLOAD_SIZE];
-    payload.copy_from_slice(&bytes[0..SIGNING_PAYLOAD_SIZE]);
-    payload
+    record.signing_payload()
 }
 
 /// Memverifikasi keabsahan tanda tangan Ed25519 pada MutationRecord terhadap kunci publik pengirim.

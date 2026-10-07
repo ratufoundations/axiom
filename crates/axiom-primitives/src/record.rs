@@ -35,8 +35,19 @@ pub struct MutationRecord {
 }
 
 impl MutationRecord {
-    /// Ukuran pasti satu MutationRecord dalam byte (161 byte).
+    /// Ukuran pasti satu MutationRecord dalam byte (161 byte, RFC-0001 §3).
     pub const RECORD_SIZE: usize = RECORD_SIZE;
+
+    /// Panjang data mutasi yang ditandatangani oleh pengirim (97 byte, RFC-0001 §3.3).
+    pub const SIGNING_PAYLOAD_SIZE: usize = 97;
+
+    /// Menghasilkan 97 byte pertama payload mutasi untuk verifikasi tanda tangan kriptografi Ed25519.
+    pub fn signing_payload(&self) -> [u8; Self::SIGNING_PAYLOAD_SIZE] {
+        let bytes = self.to_bytes();
+        let mut payload = [0u8; Self::SIGNING_PAYLOAD_SIZE];
+        payload.copy_from_slice(&bytes[0..Self::SIGNING_PAYLOAD_SIZE]);
+        payload
+    }
 
     /// Serialisasi record ke dalam representasi biner tepat 161 byte (Little-Endian).
     pub fn to_bytes(&self) -> [u8; RECORD_SIZE] {

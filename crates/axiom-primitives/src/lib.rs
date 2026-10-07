@@ -137,4 +137,29 @@ mod tests {
         assert_eq!(restored.amount, amount);
         assert_eq!(restored.signature, signature);
     }
+
+    #[test]
+    fn test_mutation_record_signing_payload_97_bytes() {
+        let sender = AccountId::new([0xaa; 32]);
+        let recipient = AccountId::new([0xbb; 32]);
+        let amount = AxmValue::from_atomic(10_000_000_000);
+        let signature = Signature::new([0xcc; 64]);
+
+        let record = MutationRecord {
+            epoch: 1,
+            sequence_number: 10,
+            record_kind: 1,
+            sender,
+            recipient,
+            amount,
+            signature,
+        };
+
+        let signing_payload = record.signing_payload();
+        assert_eq!(signing_payload.len(), MutationRecord::SIGNING_PAYLOAD_SIZE);
+        assert_eq!(signing_payload.len(), 97);
+
+        let full_bytes = record.to_bytes();
+        assert_eq!(&signing_payload[..], &full_bytes[..97]);
+    }
 }
