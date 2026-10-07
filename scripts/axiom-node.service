@@ -1,0 +1,42 @@
+[Unit]
+Description=Axiom Deterministic Ledger Node
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=axiom
+Group=axiom
+EnvironmentFile=/etc/axiom/node.env
+
+ExecStart=/usr/local/bin/axiom-node \
+    --data-dir ${AXIOM_DATA_DIR} \
+    --archive-dir ${AXIOM_ARCHIVE_DIR} \
+    --listen ${AXIOM_LISTEN_ADDR} \
+    --epoch ${AXIOM_EPOCH} \
+    --seed-byte ${AXIOM_SEED_BYTE}
+
+# Manajemen Sinyal & Siklus Hidup
+KillMode=process
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=5s
+
+# Alokasi Sumber Daya
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+# Pengerasan Keamanan (Security Hardening)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/axiom
+
+[Install]
+WantedBy=multi-user.target
