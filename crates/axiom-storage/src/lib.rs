@@ -91,6 +91,7 @@ mod tests {
         let offset1 = writer.append_record(&rec1).expect("Append rec1");
         let offset2 = writer.append_record(&rec2).expect("Append rec2");
         let offset3 = writer.append_record(&rec3).expect("Append rec3");
+        writer.flush_and_sync().expect("Flush and sync records");
 
         assert_eq!(offset1, SEGMENT_HEADER_SIZE as u64);
         assert_eq!(offset2, offset1 + RECORD_SIZE as u64);
@@ -188,6 +189,7 @@ mod tests {
         writer.append_record(&rec1).expect("Append rec1");
         writer.append_record(&rec2).expect("Append rec2");
         writer.append_record(&rec3).expect("Append rec3");
+        writer.flush_and_sync().expect("Flush and sync records");
 
         let reader = SegmentReader::open(&path).expect("Reader should open");
         let stream = reader.stream_records().expect("Stream records");

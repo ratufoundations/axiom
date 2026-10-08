@@ -1,4 +1,5 @@
-//! Modul penulis sekuensial linear (append-only) untuk segmen log Axiom.
+//! Modul penulis sekuensial linear (append-only) untuk segmen log Axiom
+//! dengan manajemen buffer memori dan kebijakan durabilitas hardware.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -12,15 +13,33 @@ use crate::segment::{
     SegmentFooter, SegmentHeader, MAX_SEGMENT_SIZE, SEGMENT_FOOTER_SIZE, SEGMENT_HEADER_SIZE,
 };
 
-/// Penulis segmen log append-only berkapasitas tetap (maks 128 MB).
+/// Kapasitas buffer tulis memori terbuffer (128 KB = 131.072 byte).
+pub const WRITE_BUFFER_CAPACITY: usize = 128 * 1024;
+
+/// Kebijakan durabilitas dan sinkronisasi hardware disk untuk operasi append log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurabilityPolicy {
+    /// Setiap record mutasi langsung ditulis dan disinkronisasi ke disk fisik via sync_data().
+    Strict,
+    /// Menahan mutasi dalam buffer memori dan mengeksekusi sync_data() setiap ambang batch_size tercapai.
+    GroupCommit { batch_size: u32 },
+    /// Mengandalkan buffer memori 128 KB tanpa fsync eksplisit per mutasi; flush otomatis saat buffer penuh.
+    BufferedRelaxed,
+}
+
+/// Penulis segmen log append-only berkapasitas tetap (maks 128 MB) dengan manajemen buffer dan durabilitas.
 pub struct SegmentWriter {
     file: File,
     header: SegmentHeader,
     current_offset: u64,
+    flushed_offset: u64,
     total_records: u64,
     first_sequence: u64,
     last_sequence: u64,
     is_sealed: bool,
+    policy: DurabilityPolicy,
+    write_buffer: Vec<u8>,
+    uncommitted_records: u32,
 }
 
 fn is_valid_committed_record(buf: &[u8; RECORD_SIZE]) -> bool {
@@ -41,13 +60,14 @@ fn is_valid_committed_record(buf: &[u8; RECORD_SIZE]) -> bool {
 }
 
 impl SegmentWriter {
-    /// Membuat berkas segmen baru pada jalur `path` dengan pra-alokasi instan 128 MB
-    /// dan menginisialisasi header 42 byte di offset 0.
-    pub fn create<P: AsRef<Path>>(
+    /// Membuat berkas segmen baru dengan kebijakan durabilitas eksplisit
+    /// dan pra-alokasi instan 128 MB.
+    pub fn create_with_policy<P: AsRef<Path>>(
         path: P,
         version: u16,
         epoch: u64,
         segment_index: u32,
+        policy: DurabilityPolicy,
     ) -> Result<Self, StorageError> {
         let mut file = OpenOptions::new()
             .read(true)
@@ -71,11 +91,59 @@ impl SegmentWriter {
             file,
             header,
             current_offset,
+            flushed_offset: current_offset,
             total_records: 0,
             first_sequence: 0,
             last_sequence: 0,
             is_sealed: false,
+            policy,
+            write_buffer: Vec::with_capacity(WRITE_BUFFER_CAPACITY),
+            uncommitted_records: 0,
         })
+    }
+
+    /// Membuat berkas segmen baru pada jalur `path` dengan pra-alokasi instan 128 MB
+    /// dan kebijakan default GroupCommit(batch_size: 100).
+    pub fn create<P: AsRef<Path>>(
+        path: P,
+        version: u16,
+        epoch: u64,
+        segment_index: u32,
+    ) -> Result<Self, StorageError> {
+        Self::create_with_policy(
+            path,
+            version,
+            epoch,
+            segment_index,
+            DurabilityPolicy::GroupCommit { batch_size: 100 },
+        )
+    }
+
+    /// Menulis seluruh data di buffer memori ke berkas fisik tanpa memanggil sync_data.
+    pub fn flush_buffer(&mut self) -> Result<(), StorageError> {
+        if self.write_buffer.is_empty() {
+            return Ok(());
+        }
+
+        self.file.seek(SeekFrom::Start(self.flushed_offset))?;
+        self.file.write_all(&self.write_buffer)?;
+
+        let buffer_len = self.write_buffer.len() as u64;
+        self.flushed_offset = self
+            .flushed_offset
+            .checked_add(buffer_len)
+            .ok_or(StorageError::OutOfBounds)?;
+
+        self.write_buffer.clear();
+        Ok(())
+    }
+
+    /// Mengosongkan buffer memori ke disk dan mengeksekusi hardware sync_data.
+    pub fn flush_and_sync(&mut self) -> Result<(), StorageError> {
+        self.flush_buffer()?;
+        self.file.sync_data()?;
+        self.uncommitted_records = 0;
+        Ok(())
     }
 
     /// Membuka berkas segmen yang sudah ada dan melakukan pemulihan torn-write jika terjadi crash.
@@ -234,16 +302,20 @@ impl SegmentWriter {
             file,
             header,
             current_offset: valid_size,
+            flushed_offset: valid_size,
             total_records,
             first_sequence,
             last_sequence,
             is_sealed,
+            policy: DurabilityPolicy::GroupCommit { batch_size: 100 },
+            write_buffer: Vec::with_capacity(WRITE_BUFFER_CAPACITY),
+            uncommitted_records: 0,
         })
     }
 
-    /// Menambahkan satu MutationRecord (161 byte) secara sekuensial ke ujung berkas segmen.
+    /// Menambahkan satu MutationRecord (161 byte) secara sekuensial ke ujung log.
     ///
-    /// Mengembalikan offset byte awal penulisan record tersebut.
+    /// Menegakkan penanganan buffer 128 KB dan kebijakan durabilitas hardware.
     pub fn append_record(&mut self, record: &MutationRecord) -> Result<u64, StorageError> {
         if self.is_sealed {
             return Err(StorageError::SegmentAlreadySealed);
@@ -265,9 +337,13 @@ impl SegmentWriter {
             return Err(StorageError::SegmentFull);
         }
 
+        // Jika buffer tidak memuat satu record lagi, flush buffer ke disk terlebih dahulu
+        if self.write_buffer.len() + RECORD_SIZE > WRITE_BUFFER_CAPACITY {
+            self.flush_buffer()?;
+        }
+
         let write_offset = self.current_offset;
-        self.file.seek(SeekFrom::Start(write_offset))?;
-        self.file.write_all(&record_bytes)?;
+        self.write_buffer.extend_from_slice(&record_bytes);
 
         self.current_offset = next_offset;
         if self.total_records == 0 {
@@ -278,6 +354,24 @@ impl SegmentWriter {
             .total_records
             .checked_add(1)
             .ok_or(StorageError::OutOfBounds)?;
+        self.uncommitted_records = self
+            .uncommitted_records
+            .checked_add(1)
+            .ok_or(StorageError::OutOfBounds)?;
+
+        match self.policy {
+            DurabilityPolicy::Strict => {
+                self.flush_and_sync()?;
+            }
+            DurabilityPolicy::GroupCommit { batch_size } => {
+                if self.uncommitted_records >= batch_size {
+                    self.flush_and_sync()?;
+                }
+            }
+            DurabilityPolicy::BufferedRelaxed => {
+                // Jangan sinkronisasi; flush hanya saat buffer mencapai kapasitas penuh
+            }
+        }
 
         Ok(write_offset)
     }
@@ -295,6 +389,9 @@ impl SegmentWriter {
         if self.is_sealed {
             return Err(StorageError::SegmentAlreadySealed);
         }
+
+        // Flush seluruh data yang tersisa di memory buffer sebelum menulis footer
+        self.flush_buffer()?;
 
         let footer = SegmentFooter::new(
             self.total_records,
@@ -320,6 +417,8 @@ impl SegmentWriter {
 
         self.is_sealed = true;
         self.current_offset = sealed_len;
+        self.flushed_offset = sealed_len;
+        self.uncommitted_records = 0;
 
         Ok(footer)
     }
@@ -336,15 +435,47 @@ impl SegmentWriter {
         self.current_offset
     }
 
+    /// Mengambil offset fisik byte terakhir yang telah dituliskan ke berkas disk.
+    #[inline]
+    pub fn flushed_offset(&self) -> u64 {
+        self.flushed_offset
+    }
+
     /// Mengambil total record yang telah dituliskan.
     #[inline]
     pub fn total_records(&self) -> u64 {
         self.total_records
     }
 
+    /// Mengambil jumlah record yang belum disinkronisasi ke disk pada batch saat ini.
+    #[inline]
+    pub fn uncommitted_records(&self) -> u32 {
+        self.uncommitted_records
+    }
+
+    /// Mengambil kebijakan durabilitas aktif pada writer.
+    #[inline]
+    pub fn policy(&self) -> DurabilityPolicy {
+        self.policy
+    }
+
+    /// Mengambil referensi buffer tulis memori internal.
+    #[inline]
+    pub fn write_buffer(&self) -> &[u8] {
+        &self.write_buffer
+    }
+
     /// Mengambil referensi header segmen.
     #[inline]
     pub fn header(&self) -> &SegmentHeader {
         &self.header
+    }
+}
+
+impl Drop for SegmentWriter {
+    fn drop(&mut self) {
+        if !self.is_sealed && !self.write_buffer.is_empty() {
+            let _ = self.flush_buffer();
+        }
     }
 }

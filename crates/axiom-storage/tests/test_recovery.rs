@@ -126,6 +126,9 @@ fn test_torn_write_recovery_at_tail() {
         .append_record(&rec4)
         .expect("Append record 4 ke writer pulih");
     assert_eq!(offset4, 525);
+    recovered_writer
+        .flush_and_sync()
+        .expect("Flush record 4 ke disk");
 
     // 9. Pastikan ukuran berkas bertambah bersih ke 525 + 161 = 686 byte tanpa korupsi
     let final_disk_len = fs::metadata(&path).expect("Metadata berkas akhir").len();
