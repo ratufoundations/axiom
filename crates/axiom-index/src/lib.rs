@@ -9,11 +9,13 @@ pub mod entry;
 pub mod error;
 pub mod keydir;
 pub mod replay;
+pub mod snapshot;
 
 pub use entry::*;
 pub use error::*;
 pub use keydir::*;
 pub use replay::*;
+pub use snapshot::*;
 
 #[cfg(test)]
 mod tests {

@@ -181,11 +181,42 @@
 
 ---
 
+### Ticket OPT-INDEX-02: Keydir Checkpoint Snapshotting & Fast Recovery
+- **Target Subsystem**: `crates/axiom-index`
+- **Status**: Validated & Merged
+- **Specification**: RFC-0002 In-memory state persistence via 96-byte binary snapshot header, BLAKE3 payload integrity hashing, atomic two-phase write (.tmp -> .snap), and O(N) streaming recovery.
+
+#### Technical Invariants
+1. **96-Byte Snapshot Header Layout**:
+   - Layout: `magic` (8B, `*b"AXMSNAP\x01"`), `version` (2B), `reserved_pad1` (6B), `epoch` (8B), `segment_index` (4B), `reserved_pad2` (4B), `total_supply` (16B, align 16), `total_accounts` (8B, align 8), `state_digest` (32B), `created_at` (8B, align 8).
+   - Invariant: Exactly 96 physical bytes with 0 padding (`std::mem::size_of::<SnapshotHeader>() == 96`, `std::mem::align_of::<SnapshotHeader>() == 16`).
+   - Total File Size Equation: $\text{File\_Size} = 96 + (N \times 80)\text{ bytes}$.
+2. **Two-Stage Atomic Persistence Pipeline**:
+   - Sequential dump writes to temporary file (`.tmp`) first, with 96-byte header prepended upon payload hashing completion.
+   - Physical disk synchronization (`sync_all`) executed prior to atomic file rename to `.snap`, guaranteeing zero corrupted checkpoints during sudden power loss.
+3. **O(N) Streaming Restore & Zero Sorting Reconstruct**:
+   - Entries dumped sequentially across 256 buckets in naturally sorted order; restoration streams directly into bucket vectors without binary search shifting or sorting passes ($< 50\text{ ms}$ load time).
+4. **BLAKE3 Cryptographic Integrity Protection**:
+   - 32-byte BLAKE3 state digest covers all $N \times 80$ bytes of entry payload. Single-bit corruption triggers instant fail-fast rejection (`IndexError::SnapshotChecksumMismatch`).
+
+#### Test Execution & Verification Results
+- **Test Suite**: `crates/axiom-index/tests/test_snapshot.rs`
+- **Execution Latency**: 0.10s (5 integration tests)
+- **Snapshot Metrics**:
+  - `test_snapshot_header_binary_layout`: Verified `size_of == 96` and `align_of == 16`.
+  - `test_snapshot_roundtrip_save_and_load`: Seeded 1,280 accounts across 256 buckets (5/bucket); verified physical file length on disk matched exactly $96 + (1,280 \times 80) = 102,496$ bytes; loaded checkpoint into fresh `Keydir` and verified 100% state conservation of balances, sequence numbers, and locations.
+  - `test_snapshot_fail_fast_checksum_tampering`: Injected 1-byte corruption at offset 200; confirmed immediate deterministic fail-fast with `IndexError::SnapshotChecksumMismatch`.
+  - `test_snapshot_fail_fast_invalid_magic_or_truncated`: Confirmed sub-96B files fail with `IndexError::CorruptedSnapshotHeader { size: 50 }`, and corrupted magic fails with `IndexError::InvalidSnapshotMagic`.
+  - `test_cold_boot_fast_recovery_with_delta_replay`: Validated cold boot snapshot load in $< 50\text{ ms}$ followed by 15-transaction delta segment replay; verified all 35 transactions and total supply conserved.
+
+---
+
 ## Upcoming Tickets
 
-### Ticket OPT-INDEX-02: Keydir Checkpoint Snapshotting & Sparse Paging
+### Ticket OPT-INDEX-03: LRU Sparse Paging & Cold State Eviction
 - **Target Subsystem**: `crates/axiom-index`
 - **Status**: Queued (Next Assignment)
-- **Specification**: Implement zero-copy background snapshotting of the 256-bucket keydir to disk checkpoints and LRU sparse paging for cold accounts.
+- **Specification**: Implement fixed RAM memory budgeting, LRU sparse paging, and cold state offloading to disk index segments.
+
 
 

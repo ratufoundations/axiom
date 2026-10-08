@@ -19,9 +19,9 @@ pub const BUCKET_COUNT: usize = 256;
 /// dengan byte pertama `AccountId`. Kompleksitas pencarian adalah O(log2(N / 256)).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keydir {
-    buckets: Box<[Vec<CompactAccountEntry>; BUCKET_COUNT]>,
-    total_accounts: usize,
-    total_supply: AxmValue,
+    pub(crate) buckets: Box<[Vec<CompactAccountEntry>; BUCKET_COUNT]>,
+    pub(crate) total_accounts: usize,
+    pub(crate) total_supply: AxmValue,
 }
 
 impl Default for Keydir {
@@ -350,5 +350,22 @@ impl Keydir {
     /// Iterator referensi entri padat 80-byte.
     pub fn entries(&self) -> impl Iterator<Item = &CompactAccountEntry> {
         self.buckets.iter().flat_map(|bucket| bucket.iter())
+    }
+
+    /// Menyimpan checkpoint snapshot status in-memory Keydir secara atomik ke disk.
+    pub fn save_checkpoint<P: AsRef<Path>>(
+        &self,
+        path: P,
+        epoch: u64,
+        segment_index: u32,
+    ) -> Result<(), IndexError> {
+        crate::snapshot::write_snapshot(self, path, epoch, segment_index)
+    }
+
+    /// Memuat checkpoint snapshot dari disk dan merekonstruksi Keydir dalam O(N).
+    pub fn load_checkpoint<P: AsRef<Path>>(
+        path: P,
+    ) -> Result<(Self, crate::snapshot::SnapshotHeader), IndexError> {
+        crate::snapshot::read_snapshot(path)
     }
 }
