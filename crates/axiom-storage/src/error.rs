@@ -18,6 +18,10 @@ pub enum StorageError {
     CorruptedRecord,
     /// Posisi offset berada di luar batas berkas segmen yang valid.
     OutOfBounds,
+    /// Ukuran header berkas segmen terpotong atau korup (< 42 byte).
+    CorruptedHeader { size: usize },
+    /// Kegagalan pemulihan segmen setelah crash atau torn write.
+    RecoveryFailed(String),
 }
 
 impl fmt::Display for StorageError {
@@ -29,6 +33,10 @@ impl fmt::Display for StorageError {
             Self::SegmentAlreadySealed => write!(f, "Cannot append to an already sealed segment"),
             Self::CorruptedRecord => write!(f, "Corrupted mutation record bytes detected"),
             Self::OutOfBounds => write!(f, "Offset out of bounds in segment file"),
+            Self::CorruptedHeader { size } => {
+                write!(f, "Segment header is corrupted or incomplete (size: {size} < 42 bytes)")
+            }
+            Self::RecoveryFailed(reason) => write!(f, "Segment recovery failed: {reason}"),
         }
     }
 }
