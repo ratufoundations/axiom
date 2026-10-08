@@ -19,6 +19,16 @@ pub enum ConsensusError {
     ArithmeticOverflow,
     /// Validator memiliki bobot nol yang tidak valid.
     ZeroWeightValidator,
+    /// Suara yang diajukan tidak membuktikan equivocation (misal intisari blok identik).
+    NonEquivocatingVotes,
+    /// Slot bukti tidak cocok (epoch atau round berbeda antara suara dan bukti).
+    InvalidEvidenceSlotMismatch,
+    /// Identitas validator pada suara tidak cocok dengan validator pada bukti.
+    ValidatorMismatch,
+    /// Validator telah dicabut hak suaranya secara permanen (tombstoned) akibat slashing.
+    ValidatorTombstoned,
+    /// Terjadi luapan aritmatika saat menghitung penalti pemotongan pasak (slashing).
+    SlashingCalculationOverflow,
 }
 
 impl fmt::Display for ConsensusError {
@@ -31,6 +41,11 @@ impl fmt::Display for ConsensusError {
             Self::ProposalMismatch => write!(f, "Consensus Error: Proposal digest mismatch"),
             Self::ArithmeticOverflow => write!(f, "Consensus Error: Arithmetic overflow in weight calculation"),
             Self::ZeroWeightValidator => write!(f, "Consensus Error: Validator voting weight cannot be zero"),
+            Self::NonEquivocatingVotes => write!(f, "Consensus Error: Votes do not equivocate (identical block hash)"),
+            Self::InvalidEvidenceSlotMismatch => write!(f, "Consensus Error: Evidence slot mismatch (epoch or round differs)"),
+            Self::ValidatorMismatch => write!(f, "Consensus Error: Vote validator does not match evidence validator"),
+            Self::ValidatorTombstoned => write!(f, "Consensus Error: Validator is tombstoned due to slashing"),
+            Self::SlashingCalculationOverflow => write!(f, "Consensus Error: Arithmetic overflow in slashing penalty calculation"),
         }
     }
 }

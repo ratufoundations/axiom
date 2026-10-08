@@ -246,12 +246,50 @@
 
 ---
 
-## Upcoming Tickets
-
 ### Ticket OPT-CONSENSUS-01: Equivocation Detection & Double-Sign Slashing
 - **Target Subsystem**: `crates/axiom-consensus`
+- **Status**: Validated & Merged
+- **Specification**: Stateless self-contained fraud proof verification (`EquivocationEvidence`), deterministic 80-byte vote signing framing (`VoteRecord`), 100% hard slashing penalty (10,000 BPS burn), permanent validator tombstoning, and official system notification emission (`RECORD_KIND_SYSTEM_NOTIF`).
+
+#### Technical Invariants
+1. **Deterministic 80-Byte Vote Signing Payload**:
+   - Layout: `epoch` (8B Little-Endian), `round` (8B Little-Endian), `block_hash` (32B), `validator` (32B).
+   - Invariant: Zero memory allocation per vote payload framing; cryptographically signed with Ed25519.
+2. **Stateless Self-Contained Fraud Proof Verification (`EquivocationEvidence`)**:
+   - Fail-Fast Order:
+     1. Validator identity match: `vote_a.validator == self.validator == vote_b.validator` (else `ValidatorMismatch`).
+     2. Slot match: `vote_a.epoch == self.epoch == vote_b.epoch` and `vote_a.round == self.round == vote_b.round` (else `InvalidEvidenceSlotMismatch`).
+     3. Contradictory block hash: `vote_a.block_hash != vote_b.block_hash` (else `NonEquivocatingVotes`).
+     4. Independent Ed25519 signature verification against validator public key (else `InvalidSignature`).
+3. **Deterministic Integer Slashing (Pure Integer BPS Arithmetic)**:
+   - Penalty calculation: `(bonded_stake * penalty_bps) / 10_000` via 256-bit ratio multiplication (`checked_mul_ratio`).
+   - Default Hard Slashing: `HARD_SLASH_PENALTY_BPS = 10_000` (100% burn). Penalty > 10,000 BPS fails fast with `SlashingCalculationOverflow`.
+   - Floating-point types strictly forbidden; zero precision loss.
+4. **Permanent Validator Tombstoning**:
+   - Slashed validator account inserted into `tombstones: BTreeSet<AccountId>`.
+   - Any subsequent votes or proposals from the tombstoned validator rejected fail-fast with `ConsensusError::ValidatorTombstoned`.
+5. **System Notification Log Emission (`RECORD_KIND_SYSTEM_NOTIF = 2`)**:
+   - Generates 161-byte `MutationRecord` containing sender (slashed validator), recipient (zero burn address), slashed amount, and non-zero proof signature.
+
+#### Test Execution & Verification Results
+- **Test Suite**: `crates/axiom-consensus/tests/test_equivocation.rs`
+- **Execution Latency**: 0.11s (6 integration tests)
+- **Equivocation & Slashing Metrics**:
+  - `test_valid_equivocation_evidence_verification`: Verified valid contradictory votes on round (epoch 1, round 1) successfully validate fraud proof.
+  - `test_reject_non_equivocation_identical_blocks`: Confirmed identical block hash rejection with `ConsensusError::NonEquivocatingVotes`.
+  - `test_reject_differing_epochs_or_rounds`: Confirmed epoch and round mismatches fail fast with `ConsensusError::InvalidEvidenceSlotMismatch`.
+  - `test_reject_invalid_signature_in_evidence`: Tampered 1-byte signature failed fast with `ConsensusError::InvalidSignature`.
+  - `test_deterministic_slashing_and_tombstone`: 1,000 AXM bonded stake subjected to 10,000 BPS slashing penalty; verified 1,000 AXM burned, 0 AXM remaining, validator marked tombstoned, and subsequent votes rejected with `ConsensusError::ValidatorTombstoned`.
+  - `test_system_notification_mutation_generation`: Verified slashing generates compliant `MutationRecord` with `record_kind == RECORD_KIND_SYSTEM_NOTIF`, epoch 1, non-zero proof signature, and exact deduction.
+
+---
+
+## Upcoming Tickets
+
+### Ticket OPT-CONSENSUS-02: Deterministic View Change & Pacemaker
+- **Target Subsystem**: `crates/axiom-consensus`
 - **Status**: Queued (Next Assignment)
-- **Specification**: Implement validator equivocation detection, double-sign cryptographic evidence generation, and slashing invariants.
+- **Specification**: Implement leader timeout detection, round synchronization pacemaker, and deterministic view change certificates.
 
 
 
