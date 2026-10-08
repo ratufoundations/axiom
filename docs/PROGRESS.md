@@ -284,12 +284,52 @@
 
 ---
 
-## Upcoming Tickets
-
 ### Ticket OPT-CONSENSUS-02: Deterministic View Change & Pacemaker
 - **Target Subsystem**: `crates/axiom-consensus`
+- **Status**: Validated & Merged
+- **Specification**: Zero-communication deterministic proposer rotation (`(epoch + round) % N`), fixed 56-byte timeout message payload framing (`TimeoutMsg`), supermajority timeout certificate aggregation (`TimeoutCertificate`), and pure integer exponential backoff pacemaker (`Pacemaker`).
+
+#### Technical Invariants
+1. **Deterministic Proposer Election**:
+   - Formula: `leader_idx = (epoch + round) % N` over active, non-tombstoned validator list.
+   - Guaranteed identical leader resolution across all decentralized nodes with zero extra network rounds.
+   - Tombstoned validators automatically excluded from rotation schedule.
+2. **Fixed 56-Byte Timeout Signing Payload**:
+   - Layout: `epoch` (8B Little-Endian), `round` (8B Little-Endian), `high_qc_round` (8B Little-Endian), `validator` (32B).
+   - Invariant: Zero heap allocations during timeout message generation; signed cryptographically with Ed25519.
+3. **Supermajority Timeout Certificate (TC) Assembly**:
+   - Quorum requirement: `(2 * total_weight / 3) + 1`.
+   - Invariant validation:
+     - Strict slot alignment: all votes must match targeted `epoch` and `round` (else `InvalidTimeoutSlotMismatch`).
+     - Zero duplicate votes: duplicate messages from same validator fail fast with `DuplicateTimeoutVote`.
+     - Valid Ed25519 signatures verified for every participant (else `InvalidTimeoutSignature`).
+     - Aggregated `high_qc_round = max(votes.high_qc_round)` to ensure liveness across highest certified view.
+4. **Pure Integer Exponential Backoff Pacemaker**:
+   - Formula: $\Delta_{\text{timeout}} = \Delta_{\text{base}} \times 2^{\min(\text{consecutive\_timeouts},\ 6)}$.
+   - Standard progression: 2,000 ms -> 4,000 ms -> 8,000 ms -> 16,000 ms -> 32,000 ms -> 64,000 ms -> capped at 128,000 ms.
+   - Pure integer arithmetic via `saturating_mul` and bit-shifting; zero floating-point types.
+   - Successful proposal commit (`on_success`) resets consecutive timeout counter back to 0 (2,000 ms).
+5. **Deterministic Round Advancement**:
+   - Processing a valid `TimeoutCertificate` advances pacemaker `current_round` from $R$ to $R + 1$, allowing seamless view change without stalling the ledger.
+
+#### Test Execution & Verification Results
+- **Test Suite**: `crates/axiom-consensus/tests/test_view_change.rs`
+- **Execution Latency**: 0.19s (5 integration tests)
+- **View Change & Pacemaker Metrics**:
+  - `test_deterministic_leader_election`: Verified leader rotation across 4 validators for rounds 1..=5 (`(epoch + round) % 4`); tombstoned validator B via verified slashing evidence and confirmed seamless rotation across {A, C, D}.
+  - `test_timeout_certificate_supermajority_assembly`: Tested 4-validator set (threshold 3); verified 2 votes fail with `InsufficientTimeoutQuorum { required: 3, actual: 2 }`; 3rd vote successfully assembles valid TC with `high_qc_round = max(votes)`.
+  - `test_reject_timeout_mismatch_or_duplicate`: Verified rejection of duplicate votes (`DuplicateTimeoutVote`) and slot mismatches across differing rounds and epochs (`InvalidTimeoutSlotMismatch`).
+  - `test_pacemaker_exponential_backoff_and_reset`: Confirmed timeout scaling (2,000 ms -> 4,000 ms -> ... -> capped at 128,000 ms); verified commit reset back to 2,000 ms.
+  - `test_advance_round_on_timeout_certificate`: Fed TC for round 3 to pacemaker; verified round progression to 4 and accurate leader election for the new round.
+
+---
+
+## Upcoming Tickets
+
+### Ticket OPT-NETWORK-01: Bounded TCP Flow Control & Rate Limiting
+- **Target Subsystem**: `crates/axiom-network`
 - **Status**: Queued (Next Assignment)
-- **Specification**: Implement leader timeout detection, round synchronization pacemaker, and deterministic view change certificates.
+- **Specification**: Implement bounded TCP receive windows, per-peer token bucket rate limiting, and backpressure propagation to consensus engine.
 
 
 

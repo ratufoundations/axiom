@@ -29,6 +29,16 @@ pub enum ConsensusError {
     ValidatorTombstoned,
     /// Terjadi luapan aritmatika saat menghitung penalti pemotongan pasak (slashing).
     SlashingCalculationOverflow,
+    /// Akumulasi suara timeout belum mencapai ambang batas kuorum supermayoritas.
+    InsufficientTimeoutQuorum { required: usize, actual: usize },
+    /// Slot pesan timeout tidak cocok dengan slot sertifikat (epoch atau round berbeda).
+    InvalidTimeoutSlotMismatch,
+    /// Validator telah memberikan suara timeout sebelumnya pada ronde yang sama.
+    DuplicateTimeoutVote(axiom_primitives::crypto::AccountId),
+    /// Tanda tangan kriptografis pada pesan timeout tidak valid.
+    InvalidTimeoutSignature,
+    /// Tidak ada validator aktif yang tersedia untuk pemilihan pemimpin (proposer).
+    NoActiveValidators,
 }
 
 impl fmt::Display for ConsensusError {
@@ -46,6 +56,18 @@ impl fmt::Display for ConsensusError {
             Self::ValidatorMismatch => write!(f, "Consensus Error: Vote validator does not match evidence validator"),
             Self::ValidatorTombstoned => write!(f, "Consensus Error: Validator is tombstoned due to slashing"),
             Self::SlashingCalculationOverflow => write!(f, "Consensus Error: Arithmetic overflow in slashing penalty calculation"),
+            Self::InsufficientTimeoutQuorum { required, actual } => {
+                write!(
+                    f,
+                    "Consensus Error: Insufficient timeout quorum (required {required}, actual {actual})"
+                )
+            }
+            Self::InvalidTimeoutSlotMismatch => write!(f, "Consensus Error: Timeout message slot mismatch"),
+            Self::DuplicateTimeoutVote(acc) => {
+                write!(f, "Consensus Error: Duplicate timeout vote from validator {acc:?}")
+            }
+            Self::InvalidTimeoutSignature => write!(f, "Consensus Error: Invalid signature in timeout message"),
+            Self::NoActiveValidators => write!(f, "Consensus Error: No active validators available"),
         }
     }
 }

@@ -8,16 +8,20 @@
 pub mod certificate;
 pub mod error;
 pub mod evidence;
+pub mod pacemaker;
 pub mod proposal;
 pub mod slashing;
+pub mod timeout;
 pub mod validator_set;
 pub mod vote;
 
 pub use certificate::*;
 pub use error::*;
 pub use evidence::*;
+pub use pacemaker::*;
 pub use proposal::*;
 pub use slashing::*;
+pub use timeout::*;
 pub use validator_set::*;
 pub use vote::*;
 
