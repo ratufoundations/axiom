@@ -7,11 +7,13 @@
 
 pub mod error;
 pub mod reader;
+pub mod scanner;
 pub mod segment;
 pub mod writer;
 
 pub use error::*;
 pub use reader::*;
+pub use scanner::*;
 pub use segment::*;
 pub use writer::*;
 

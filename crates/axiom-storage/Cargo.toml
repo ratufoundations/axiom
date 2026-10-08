@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 axiom-primitives = { path = "../axiom-primitives" }
+blake3 = { version = "1.5", default-features = false, features = ["pure"] }
+ed25519-dalek = { version = "2.1", default-features = false }
 
 [lints]
 workspace = true

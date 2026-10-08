@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Modul penanganan galat mesin penyimpanan Axiom.
 
 use core::fmt;
@@ -22,6 +24,16 @@ pub enum StorageError {
     CorruptedHeader { size: usize },
     /// Kegagalan pemulihan segmen setelah crash atau torn write.
     RecoveryFailed(String),
+    /// Pelanggaran invarian struktural format rekaman biner.
+    StructuralInvariantViolation { offset: u64, reason: String },
+    /// Ketidaksesuaian nomor urut sekuensial rekaman.
+    SequenceMismatch { expected: u64, found: u64, offset: u64 },
+    /// Ketidaksesuaian nomor epoch rekaman terhadap header segmen.
+    EpochMismatch { expected: u64, found: u64, offset: u64 },
+    /// Deteksi bit-rot atau diskrepansi checksum intisari BLAKE3 pada segmen bersegel.
+    BitRotDetected { offset: u64, expected: [u8; 32], actual: [u8; 32] },
+    /// Kegagalan verifikasi tanda tangan kriptografi Ed25519 pada payload 97 byte.
+    SignatureVerificationFailed { offset: u64 },
 }
 
 impl fmt::Display for StorageError {
@@ -37,6 +49,25 @@ impl fmt::Display for StorageError {
                 write!(f, "Segment header is corrupted or incomplete (size: {size} < 42 bytes)")
             }
             Self::RecoveryFailed(reason) => write!(f, "Segment recovery failed: {reason}"),
+            Self::StructuralInvariantViolation { offset, reason } => {
+                write!(f, "Structural invariant violation at offset {offset}: {reason}")
+            }
+            Self::SequenceMismatch { expected, found, offset } => {
+                write!(f, "Sequence mismatch at offset {offset}: expected {expected}, found {found}")
+            }
+            Self::EpochMismatch { expected, found, offset } => {
+                write!(f, "Epoch mismatch at offset {offset}: expected {expected}, found {found}")
+            }
+            Self::BitRotDetected { offset, expected, actual } => {
+                write!(
+                    f,
+                    "Bit-rot detected at offset {offset}: expected digest {:02x?}, actual {:02x?}",
+                    expected, actual
+                )
+            }
+            Self::SignatureVerificationFailed { offset } => {
+                write!(f, "Signature verification failed at offset {offset}")
+            }
         }
     }
 }

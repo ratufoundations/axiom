@@ -86,10 +86,40 @@
 
 ---
 
-## Upcoming Tickets
-
 ### Ticket OPT-STORAGE-04: Bit-Rot & Structural Invariant Fast Scan
 - **Target Subsystem**: `crates/axiom-storage`
+- **Status**: Validated & Merged
+- **Specification**: RFC-0001 Zero-Allocation Streaming Bit-Rot Detection, Fast Structural Invariant Verification, and Ed25519 Cryptographic Deep Scan
+
+#### Technical Invariants
+1. **Constant Memory Streaming I/O**: Fixed-size 128 KB buffer (`SCAN_BUFFER_CAPACITY = 128 * 1024 = 131_072` bytes) for sequential streaming I/O; $O(1)$ RAM consumption regardless of 128 MB physical segment file length; zero heap allocations per record during scan.
+2. **Structural Invariant Fail-Fast Validation**:
+   - Header validity and magic `b"AXMS"` check (defensive `CorruptedHeader` on $< 42$ bytes).
+   - Invariant 1 (Epoch Continuity): Every record must match segment header epoch (`record.epoch == header.epoch`), otherwise returns `StorageError::EpochMismatch`.
+   - Invariant 2 (Monotonic Sequence Order): Record sequence numbers must be contiguous and strictly sequential without holes, otherwise returns `StorageError::SequenceMismatch`.
+   - Invariant 3 (Record Kind Taxonomy): Record kind must strictly be `RECORD_KIND_TRANSFER (1)` or `RECORD_KIND_SYSTEM_NOTIF (2)`, otherwise returns `StorageError::StructuralInvariantViolation`.
+   - Invariant 4 (Non-Zero Cryptographic Signature): Authorizing signature must not contain all-zero bytes, preventing uninitialized record leakage.
+   - Unsealed Zero-Fill Boundary: Gracefully identifies pre-allocated `0x00` blocks on unsealed segments, terminating scan at the exact uncommitted commit line.
+3. **Bit-Rot Cryptographic Verification**: Computes streaming BLAKE3 digest across all 161-byte record payloads; on sealed segments, validates computed hash against 88-byte footer `state_digest`. Single-bit corruption immediately triggers `StorageError::BitRotDetected`.
+4. **Deep Cryptographic Verification**: Zero-heap-allocation Ed25519 signature verification (`deep_verify_signatures`) over the 97-byte signing payload against the sender's public key; tampered signatures fail fast with `StorageError::SignatureVerificationFailed`.
+
+#### Test Execution & Verification Results
+- **Test Suite**: `crates/axiom-storage/tests/test_scanner.rs`
+- **Execution Latency**: 0.24s (6 integration tests)
+- **Scanner Verification Metrics**:
+  - `test_clean_sealed_segment_scan`: 10 records scanned, sealed footer verified, BLAKE3 digest matched cleanly.
+  - `test_clean_unsealed_preallocated_segment_scan`: 5 records scanned, cleanly terminated at uncommitted 0x00 boundary at offset 847 on 128 MB pre-allocated file.
+  - `test_structural_fail_fast_invalid_record_kind`: Corrupted byte `0xFF` at offset 219 immediately halted scanner at offset 203 with `StorageError::StructuralInvariantViolation`.
+  - `test_structural_fail_fast_broken_sequence`: Skipped sequence number (2 to 5) at offset 364 immediately halted scanner with `StorageError::SequenceMismatch`.
+  - `test_bit_rot_fail_fast_sealed_digest_mismatch`: 1-bit corruption (XOR `0x01`) at offset 250 detected by BLAKE3 streaming verification, failing with `StorageError::BitRotDetected`.
+  - `test_deep_verify_signatures`: Tampered signature byte at offset 139 passed structural check but failed deep cryptographic check with `StorageError::SignatureVerificationFailed { offset: 42 }`.
+
+---
+
+## Upcoming Tickets
+
+### Ticket OPT-ENGINE-01: Execution Pipeline & Lock Contention Elimination
+- **Target Subsystem**: `crates/axiom-engine`
 - **Status**: Queued (Next Assignment)
-- **Specification**: Implement zero-allocation streaming bit-rot verification and fast structural invariant validation across log segments.
+- **Specification**: Implement multi-stage pipelined transaction execution engine to decouple cryptographic signature validation, account balance indexing, and storage logging, eliminating lock contention.
 
