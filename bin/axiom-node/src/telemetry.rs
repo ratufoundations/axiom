@@ -146,6 +146,113 @@ impl IpcServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::thread;
+
+    #[test]
+    fn test_snapshot_binary_layout_and_bounds() {
+        let collector = NodeTelemetryCollector::new();
+        collector.epoch.store(42, Ordering::Relaxed);
+        collector.segment_idx.store(7, Ordering::Relaxed);
+        collector.disk_offset.store(1048576, Ordering::Relaxed);
+        collector.total_tx_committed.store(65536, Ordering::Relaxed);
+        collector.instant_tps.store(15000, Ordering::Relaxed);
+        collector.p50_micros.store(240, Ordering::Relaxed);
+        collector.p99_micros.store(890, Ordering::Relaxed);
+        collector.active_peers.store(4, Ordering::Relaxed);
+        collector.quorum_round.store(128, Ordering::Relaxed);
+
+        let snapshot = collector.serialize_snapshot();
+
+        // 1. Validasi Ukuran Mutlak
+        assert_eq!(snapshot.len(), TELEMETRY_PAYLOAD_SIZE);
+
+        // 2. Validasi Magic & Version
+        assert_eq!(&snapshot[0..4], &IPC_RESP_MAGIC);
+        assert_eq!(u16::from_le_bytes(snapshot[4..6].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(snapshot[6..8].try_into().unwrap()), 1);
+
+        // 3. Validasi Field Little-Endian
+        assert_eq!(u64::from_le_bytes(snapshot[8..16].try_into().unwrap()), 42);
+        assert_eq!(u32::from_le_bytes(snapshot[16..20].try_into().unwrap()), 7);
+        assert_eq!(u64::from_le_bytes(snapshot[20..28].try_into().unwrap()), 1048576);
+        assert_eq!(u64::from_le_bytes(snapshot[28..36].try_into().unwrap()), 65536);
+        assert_eq!(u32::from_le_bytes(snapshot[36..40].try_into().unwrap()), 15000);
+        assert_eq!(u32::from_le_bytes(snapshot[40..44].try_into().unwrap()), 240);
+        assert_eq!(u32::from_le_bytes(snapshot[44..48].try_into().unwrap()), 890);
+        assert_eq!(u32::from_le_bytes(snapshot[48..52].try_into().unwrap()), 4);
+        assert_eq!(u64::from_le_bytes(snapshot[52..60].try_into().unwrap()), 128);
+
+        // 4. Validasi Reserved Bytes bernilai 0
+        assert!(snapshot[68..96].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_snapshot_binary_layout() {
+        test_snapshot_binary_layout_and_bounds();
+    }
+
+    #[test]
+    fn test_snapshot_checksum_integrity_and_tampering() {
+        let collector = NodeTelemetryCollector::new();
+        collector.total_tx_committed.store(1000, Ordering::Relaxed);
+
+        let mut snapshot = collector.serialize_snapshot();
+
+        // Checksum valid pada kondisi normal
+        let valid_hash = blake3::hash(&snapshot[0..96]);
+        assert_eq!(valid_hash.as_bytes(), &snapshot[96..128]);
+
+        // Manipulasi 1 byte pada payload data
+        snapshot[28] ^= 0xFF;
+
+        // Checksum wajib tidak cocok setelah mutasi liar
+        let tampered_hash = blake3::hash(&snapshot[0..96]);
+        assert_ne!(tampered_hash.as_bytes(), &snapshot[96..128]);
+    }
+
+    #[test]
+    fn test_snapshot_checksum_integrity() {
+        test_snapshot_checksum_integrity_and_tampering();
+    }
+
+    #[test]
+    fn test_atomic_metrics_thread_safety() {
+        let collector = Arc::new(NodeTelemetryCollector::new());
+        let num_threads = 8;
+        let ops_per_thread = 1_000;
+        let mut handles = Vec::with_capacity(num_threads);
+
+        for _ in 0..num_threads {
+            let col = Arc::clone(&collector);
+            handles.push(thread::spawn(move || {
+                for _ in 0..ops_per_thread {
+                    col.total_tx_committed.fetch_add(1, Ordering::Relaxed);
+                    col.instant_tps.store(15000, Ordering::Relaxed);
+                    col.disk_offset.fetch_add(64, Ordering::Relaxed);
+
+                    // Serialisasi snapshot serentak di tengah mutasi untuk memvalidasi thread-safety tanpa RwLock
+                    let snap = col.serialize_snapshot();
+                    assert_eq!(snap.len(), TELEMETRY_PAYLOAD_SIZE);
+                    let hash = blake3::hash(&snap[0..96]);
+                    assert_eq!(hash.as_bytes(), &snap[96..128]);
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("Worker thread gagal");
+        }
+
+        assert_eq!(
+            collector.total_tx_committed.load(Ordering::Relaxed),
+            (num_threads * ops_per_thread) as u64
+        );
+        let final_snap = collector.serialize_snapshot();
+        let expected_hash = blake3::hash(&final_snap[0..96]);
+        assert_eq!(expected_hash.as_bytes(), &final_snap[96..128]);
+    }
 
     #[test]
     fn test_telemetry_snapshot_serialization_and_checksum() {
