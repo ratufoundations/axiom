@@ -211,12 +211,47 @@
 
 ---
 
-## Upcoming Tickets
-
 ### Ticket OPT-INDEX-03: LRU Sparse Paging & Cold State Eviction
 - **Target Subsystem**: `crates/axiom-index`
+- **Status**: Validated & Merged
+- **Specification**: In-memory RAM capacity capping (`max_hot_capacity`), zero-pointer LRU generation tracking via `CompactAccountEntry.flags`, on-disk 256-bucket partitioned index (`cold_state.idx`), $O(\log_2 M)$ seek binary search on disk, and transparent bidirectional paging with strict total supply conservation.
+
+#### Technical Invariants
+1. **Zero Heap Overhead LRU Tracking**:
+   - Reused 32-bit `flags` field in `CompactAccountEntry` (80 bytes) as access tick / generation counter without heap pointers or doubly-linked list nodes.
+   - Access and mutation operations increment local access tick; eviction identifies and offloads lowest-tick entries when RAM count exceeds `max_hot_capacity`.
+2. **On-Disk Cold Index Physical Layout (`cold_state.idx`)**:
+   - Fixed 4,112-byte header (`COLD_HEADER_SIZE`): Magic 8B (`*b"AXMCOLD\x01"`), Version 2B (`0x0001`), Reserved 6B (`0x00`), and 256 Bucket Descriptors (`256 * 16 = 4,096` bytes).
+   - Alignment: 4,112 bytes is an exact multiple of 16 ($4,112 / 16 = 257$), guaranteeing 16-byte boundary alignment before the first 80-byte account entry.
+   - Bucket Descriptor: `offset: u64` (8B), `entry_count: u32` (4B), `reserved: u32` (4B).
+   - Contiguous Sorted Partitions: Each bucket holds 80-byte entries sorted lexicographically by `AccountId` for $O(\log_2 M)$ on-disk binary search seek (`file.seek(SeekFrom::Start(offset + mid * 80))`) with $O(1)$ memory usage.
+3. **Atomic Persistence & Integrity**:
+   - Eviction flushes merge entries and write out partition segments atomically via `.tmp` swap (`sync_all` + atomic rename).
+   - Sub-4,112B files and invalid magic trigger immediate deterministic `IndexError::CorruptedColdIndex`.
+4. **Strict Total Supply Invariant**:
+   - Global `total_supply` strictly conserved during eviction and paging: eviction decreases RAM count without altering total monetary supply; paging restores entry to RAM bucket without duplicating balance.
+5. **Transparent Paging & Stage 1 Prefetch**:
+   - Transparent paging in `get_balance`, `get_account_state`, and `apply_mutation` fetches cold accounts on-demand.
+   - `keydir.prefetch(&account)` enables Stage 1 verifiers to load cold accounts into RAM prior to Stage 2 sequencer execution.
+
+#### Test Execution & Verification Results
+- **Test Suite**: `crates/axiom-index/tests/test_paged_index.rs`
+- **Execution Latency**: 8.90s (5 integration tests)
+- **Paged Index Metrics**:
+  - `test_cold_store_header_and_binary_search_seek`: Seeded 512 accounts across 256 buckets (2/bucket); verified 4,112B header and physical length $4,112 + (512 \times 80) = 45,072$ bytes; verified 100% binary search seek resolution ($< 1\text{ ms}$ seek latency).
+  - `test_keydir_eviction_under_memory_budget`: Initialized `Keydir` with `max_hot_capacity = 256`; seeded 512 accounts; verified RAM hot count capped at $\le 256$, cold store holding 256 entries, and global `total_supply` strictly conserved (sum of all 512 balances).
+  - `test_cold_account_transparent_paging_and_mutation`: Evicted Account A (50 AXM) to disk; verified Account A absent in RAM; executed transfer mutation from A to B (20 AXM); verified transparent page-in, balance deduction to 30 AXM, credit to B, and total supply preservation.
+  - `test_prefetch_interface_for_stage1`: Verified `keydir.prefetch` loads cold account into RAM before transaction execution.
+  - `test_tampered_cold_index_fail_fast`: Validated deterministic fail-fast rejection (`IndexError::CorruptedColdIndex`) upon corrupted magic bytes or truncated cold index.
+
+---
+
+## Upcoming Tickets
+
+### Ticket OPT-CONSENSUS-01: Equivocation Detection & Double-Sign Slashing
+- **Target Subsystem**: `crates/axiom-consensus`
 - **Status**: Queued (Next Assignment)
-- **Specification**: Implement fixed RAM memory budgeting, LRU sparse paging, and cold state offloading to disk index segments.
+- **Specification**: Implement validator equivocation detection, double-sign cryptographic evidence generation, and slashing invariants.
 
 
 

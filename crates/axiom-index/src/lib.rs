@@ -5,12 +5,14 @@
 //! Tabel indeks in-memory deterministik berbasis pola Bitcask (Keydir)
 //! untuk pencarian instan status saldo dan lokasi disk mutasi akun.
 
+pub mod cold;
 pub mod entry;
 pub mod error;
 pub mod keydir;
 pub mod replay;
 pub mod snapshot;
 
+pub use cold::*;
 pub use entry::*;
 pub use error::*;
 pub use keydir::*;

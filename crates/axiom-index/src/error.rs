@@ -21,6 +21,12 @@ pub enum IndexError {
     InvalidSnapshotMagic,
     /// Galat I/O saat membaca atau menulis berkas snapshot.
     SnapshotIoError(String),
+    /// Indeks dingin korup atau tidak valid.
+    CorruptedColdIndex(String),
+    /// Galat I/O saat manipulasi media simpan dingin di disk.
+    ColdStoreIoError(String),
+    /// Batas kapasitas penyimpanan dingin terlampaui.
+    ColdStorageCapacityExceeded,
 }
 
 impl fmt::Display for IndexError {
@@ -45,6 +51,11 @@ impl fmt::Display for IndexError {
             }
             Self::InvalidSnapshotMagic => write!(f, "Invalid snapshot magic bytes"),
             Self::SnapshotIoError(e) => write!(f, "Snapshot I/O error: {e}"),
+            Self::CorruptedColdIndex(e) => write!(f, "Corrupted cold index: {e}"),
+            Self::ColdStoreIoError(e) => write!(f, "Cold store I/O error: {e}"),
+            Self::ColdStorageCapacityExceeded => {
+                write!(f, "Cold storage capacity limit exceeded")
+            }
         }
     }
 }
