@@ -165,6 +165,9 @@ impl Iterator for RecordStream {
 
         match self.reader.read_exact(&mut record_buf) {
             Ok(()) => {
+                if record_buf.iter().all(|&b| b == 0) {
+                    return None;
+                }
                 self.current_offset = next_offset;
                 let rec = MutationRecord::from_bytes(&record_buf);
                 Some(Ok((record_offset, rec)))

@@ -71,7 +71,7 @@ mod tests {
         let writer = SegmentWriter::create(&path, 1, 1, 0).expect("Writer creation should succeed");
 
         let metadata = fs::metadata(&path).expect("File metadata should exist");
-        assert_eq!(metadata.len(), SEGMENT_HEADER_SIZE as u64);
+        assert_eq!(metadata.len(), MAX_SEGMENT_SIZE);
         assert_eq!(writer.current_offset(), SEGMENT_HEADER_SIZE as u64);
         assert_eq!(writer.total_records(), 0);
 
@@ -96,9 +96,8 @@ mod tests {
         assert_eq!(offset2, offset1 + RECORD_SIZE as u64);
         assert_eq!(offset3, offset2 + RECORD_SIZE as u64);
 
-        let expected_size = (SEGMENT_HEADER_SIZE + (3 * RECORD_SIZE)) as u64;
         let metadata = fs::metadata(&path).expect("File metadata should exist");
-        assert_eq!(metadata.len(), expected_size);
+        assert_eq!(metadata.len(), MAX_SEGMENT_SIZE);
         assert_eq!(writer.total_records(), 3);
 
         // Verifikasi pembacaan melalui SegmentReader

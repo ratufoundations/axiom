@@ -53,6 +53,14 @@ fn test_torn_write_recovery_at_tail() {
     assert_eq!(writer.current_offset(), valid_size);
     drop(writer);
 
+    // Simulasikan berkas dinamis tak berprapra-alokasi berukuran 525 byte sebelum injeksi sampah
+    OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("Buka berkas untuk set_len")
+        .set_len(525)
+        .expect("Set len 525");
+
     let initial_meta_len = fs::metadata(&path).expect("Metadata segmen").len();
     assert_eq!(initial_meta_len, 525);
 

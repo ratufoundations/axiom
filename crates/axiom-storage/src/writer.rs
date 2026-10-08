@@ -23,8 +23,26 @@ pub struct SegmentWriter {
     is_sealed: bool,
 }
 
+fn is_valid_committed_record(buf: &[u8; RECORD_SIZE]) -> bool {
+    if buf.iter().all(|&b| b == 0) {
+        return false;
+    }
+    let record_kind = buf[16];
+    if record_kind != axiom_primitives::record::RECORD_KIND_TRANSFER
+        && record_kind != axiom_primitives::record::RECORD_KIND_SYSTEM_NOTIF
+    {
+        return false;
+    }
+    // Signature bytes (97..161, 64 byte) pada record sah tidak boleh bernilai seluruhnya nol
+    if buf[97..161].iter().all(|&b| b == 0) {
+        return false;
+    }
+    true
+}
+
 impl SegmentWriter {
-    /// Membuat berkas segmen baru pada jalur `path` dan menginisialisasi header 42 byte.
+    /// Membuat berkas segmen baru pada jalur `path` dengan pra-alokasi instan 128 MB
+    /// dan menginisialisasi header 42 byte di offset 0.
     pub fn create<P: AsRef<Path>>(
         path: P,
         version: u16,
@@ -38,10 +56,14 @@ impl SegmentWriter {
             .truncate(true)
             .open(path)?;
 
+        // Pre-alokasi 128 MB (134.217.728 byte) segera untuk mencegah fragmentasi berkas
+        file.set_len(MAX_SEGMENT_SIZE)?;
+
         let header = SegmentHeader::new(version, epoch, segment_index);
         let header_bytes = header.to_bytes();
+        file.seek(SeekFrom::Start(0))?;
         file.write_all(&header_bytes)?;
-        file.flush()?;
+        file.sync_all()?;
 
         let current_offset = SEGMENT_HEADER_SIZE as u64;
 
@@ -58,9 +80,11 @@ impl SegmentWriter {
 
     /// Membuka berkas segmen yang sudah ada dan melakukan pemulihan torn-write jika terjadi crash.
     ///
-    /// Menegakkan invarian ukuran berkas: `(size - 42) % 161 == 0`.
-    /// Jika terdapat trailing bytes parsial `r > 0`, berkas dipotong (*truncate*) ke `size - r`
-    /// dan disinkronisasi ke disk fisik sebelum penulisan berikutnya.
+    /// Menegakkan invarian ukuran berkas:
+    /// - Pada segmen bersegel (sealed): memuat metadata footer dan validitas payload.
+    /// - Pada segmen pra-alokasi 128 MB: melakukan binary search scan atas nol biner (0x00)
+    ///   untuk menemukan batas slot record terakhir yang sah dan menolkan torn-write parsial jika ada.
+    /// - Pada segmen dinamis (fallback): memotong trailing bytes `(size - 42) % 161 == r`.
     pub fn recover_or_open<P: AsRef<Path>>(path: P) -> Result<Self, StorageError> {
         let mut file = OpenOptions::new()
             .read(true)
@@ -97,19 +121,63 @@ impl SegmentWriter {
             false
         };
 
-        let (valid_size, total_records) = if is_sealed {
-            let payload_bytes = raw_size
+        let (valid_size, total_records, is_sealed) = if is_sealed {
+            let footer_offset = raw_size - SEGMENT_FOOTER_SIZE as u64;
+            file.seek(SeekFrom::Start(footer_offset))?;
+            let mut footer_buf = [0u8; SEGMENT_FOOTER_SIZE];
+            file.read_exact(&mut footer_buf)?;
+            let footer = SegmentFooter::from_bytes(&footer_buf)
+                .map_err(|_| StorageError::InvalidMagic)?;
+            (raw_size, footer.total_records, true)
+        } else if raw_size == MAX_SEGMENT_SIZE {
+            // Segmen unsealed pra-alokasi 128 MB: gunakan binary zero scan
+            let max_slots = (MAX_SEGMENT_SIZE
                 .checked_sub((SEGMENT_HEADER_SIZE + SEGMENT_FOOTER_SIZE) as u64)
-                .ok_or(StorageError::OutOfBounds)?;
-            let remainder = payload_bytes % (RECORD_SIZE as u64);
-            if remainder > 0 {
-                return Err(StorageError::RecoveryFailed(
-                    "Sealed segment contains misaligned record payload".to_string(),
-                ));
+                .ok_or(StorageError::OutOfBounds)?)
+                / (RECORD_SIZE as u64);
+
+            let mut low = 0usize;
+            let mut high = max_slots as usize;
+
+            while low < high {
+                let mid = low + (high - low) / 2;
+                let slot_offset =
+                    SEGMENT_HEADER_SIZE as u64 + (mid as u64 * RECORD_SIZE as u64);
+                file.seek(SeekFrom::Start(slot_offset))?;
+                let mut slot_buf = [0u8; RECORD_SIZE];
+                file.read_exact(&mut slot_buf)?;
+
+                if is_valid_committed_record(&slot_buf) {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
             }
-            let records = payload_bytes / (RECORD_SIZE as u64);
-            (raw_size, records)
+
+            let k = low;
+
+            // Validasi slot K: jika tertulis sebagian (non-zero bytes tapi bukan record valid),
+            // nolkan kembali 161 byte slot K dan sinkronisasi ke disk fisik.
+            if k < max_slots as usize {
+                let slot_offset =
+                    SEGMENT_HEADER_SIZE as u64 + (k as u64 * RECORD_SIZE as u64);
+                file.seek(SeekFrom::Start(slot_offset))?;
+                let mut k_buf = [0u8; RECORD_SIZE];
+                file.read_exact(&mut k_buf)?;
+
+                if k_buf.iter().any(|&b| b != 0) {
+                    file.seek(SeekFrom::Start(slot_offset))?;
+                    let zeros = [0u8; RECORD_SIZE];
+                    file.write_all(&zeros)?;
+                    file.sync_all()?;
+                }
+            }
+
+            let valid_records = k as u64;
+            let current_off = SEGMENT_HEADER_SIZE as u64 + (valid_records * RECORD_SIZE as u64);
+            (current_off, valid_records, false)
         } else {
+            // Mode fallback untuk segmen dinamis (un-preallocated)
             let payload_bytes = raw_size
                 .checked_sub(SEGMENT_HEADER_SIZE as u64)
                 .ok_or(StorageError::OutOfBounds)?;
@@ -123,9 +191,9 @@ impl SegmentWriter {
                 let valid_payload = truncated_size
                     .checked_sub(SEGMENT_HEADER_SIZE as u64)
                     .ok_or(StorageError::OutOfBounds)?;
-                (truncated_size, valid_payload / (RECORD_SIZE as u64))
+                (truncated_size, valid_payload / (RECORD_SIZE as u64), false)
             } else {
-                (raw_size, payload_bytes / (RECORD_SIZE as u64))
+                (raw_size, payload_bytes / (RECORD_SIZE as u64), false)
             }
         };
 
@@ -198,6 +266,7 @@ impl SegmentWriter {
         }
 
         let write_offset = self.current_offset;
+        self.file.seek(SeekFrom::Start(write_offset))?;
         self.file.write_all(&record_bytes)?;
 
         self.current_offset = next_offset;
@@ -215,7 +284,8 @@ impl SegmentWriter {
 
     /// Menyegel berkas segmen dengan menuliskan SegmentFooter (88 byte) di ujung berkas.
     ///
-    /// Memanggil `flush` untuk memastikan seluruh byte tersimpan ke media simpan fisik.
+    /// Memotong kelebihan ruang pra-alokasi 128 MB ke ukuran riil terpakai
+    /// dan memanggil `sync_all` untuk memastikan seluruh byte tersimpan ke media simpan fisik.
     /// Setelah disegel, segmen berstatus read-only dan menolak penulisan data baru.
     pub fn seal_segment(
         &mut self,
@@ -236,14 +306,20 @@ impl SegmentWriter {
         );
 
         let footer_bytes = footer.to_bytes();
+        self.file.seek(SeekFrom::Start(self.current_offset))?;
         self.file.write_all(&footer_bytes)?;
-        self.file.flush()?;
 
-        self.is_sealed = true;
-        self.current_offset = self
+        // Reklamasi ruang pra-alokasi yang tidak terpakai dengan memotong ke batas akhir footer
+        let sealed_len = self
             .current_offset
             .checked_add(SEGMENT_FOOTER_SIZE as u64)
             .ok_or(StorageError::OutOfBounds)?;
+
+        self.file.set_len(sealed_len)?;
+        self.file.sync_all()?;
+
+        self.is_sealed = true;
+        self.current_offset = sealed_len;
 
         Ok(footer)
     }

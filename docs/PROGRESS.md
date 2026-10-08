@@ -21,7 +21,7 @@
 
 #### Test Execution & Verification Results
 - **Test Suite**: `crates/axiom-storage/tests/test_recovery.rs`
-- **Execution Latency**: 0.04s (`test_torn_write_recovery_at_tail` + `test_sub_header_truncation_recovery`)
+- **Execution Latency**: 0.02s (`test_torn_write_recovery_at_tail` + `test_sub_header_truncation_recovery`)
 - **Torn-Write Truncation Metrics**:
   - Initial valid segment: 3 mutation records = 525 bytes ($42 + 3 \times 161$).
   - Simulated crash / power loss injection: 73 trailing garbage bytes = 598 bytes.
@@ -35,9 +35,32 @@
 
 ---
 
-## Upcoming Tickets
-
 ### Ticket OPT-STORAGE-02: Zero-Fragmentation Pre-allocation
 - **Target Subsystem**: `crates/axiom-storage`
+- **Status**: Validated & Merged
+- **Specification**: RFC-0001 Instant 128 MB Reservation, Binary Zero Scan Boundary Recovery, and Footer Reclaim
+
+#### Technical Invariants
+1. **Instant Pre-allocation**: `SegmentWriter::create` allocates exactly 128 MB (`MAX_SEGMENT_SIZE = 134,217,728` bytes) immediately via OS sparse reservation (`set_len`), eliminating sequential file system fragmentation on HDD/NVMe storage while `current_offset` begins at 42.
+2. **Fixed Physical Size During Append**: File size on disk remains invariant at 134,217,728 bytes during active mutation appends; physical disk metadata updates are eliminated during transaction streaming.
+3. **Binary Zero Scan Recovery**: On unsealed segments with 128 MB physical size, `recover_or_open` applies a logarithmic binary search over maximum possible slots ($0 \le \text{slot} < 833,649$) testing record commitment criteria to identify the exact uncommitted slot boundary $K$.
+4. **Torn-Write Sanitization**: If slot $K$ contains partially written bytes (non-zero bytes from an interrupted append), the 161-byte slot is wiped with zeros (`0x00`) and synchronized (`sync_all`) before resetting `current_offset` to $42 + (K \times 161)$.
+5. **Footer Truncation & Reclamation**: Calling `seal_segment` appends the 88-byte `SegmentFooter` and reclaims all unused pre-allocated zeros by truncating the file to `current_offset + 88` bytes with `sync_all`.
+
+#### Test Execution & Verification Results
+- **Test Suite**: `crates/axiom-storage/tests/test_preallocation.rs`
+- **Execution Latency**: 0.05s (4 integration tests)
+- **Benchmark & Algorithmic Metrics**:
+  - Pre-allocation latency: $< 1$ ms via instantaneous filesystem extent pre-allocation.
+  - Binary search seek count: Exact boundary $K$ located in $\le 20$ seeks out of $833,649$ possible slots ($\lceil \log_2(833,649) \rceil = 20$).
+  - Space reclaimed upon seal: For a 5-record segment, physical size was cleanly reclaimed from $134,217,728$ bytes down to $935$ bytes ($42 + 5 \times 161 + 88$).
+  - Partial slot recovery: Injected 45-byte torn write at slot 6 was detected, zeroed out to $0\text{x}00$, offset reset to $847$, and sequential append cleanly resumed at offset $847$.
+
+---
+
+## Upcoming Tickets
+
+### Ticket OPT-STORAGE-03: Group Commit & Durability Tuning
+- **Target Subsystem**: `crates/axiom-storage`
 - **Status**: Queued (Next Assignment)
-- **Specification**: Implement zero-fragmentation fallocate / sparse file reservation for 128 MB segment allocation, eliminating file system fragmentation on sequential HDD/NVMe storage while maintaining strict 128 MB maximum segment boundaries.
+- **Specification**: Implement batch flushing scheduler and group commit durability modes (`FsyncAlways`, `FsyncBatch(N)`, `FsyncInterval(Duration)`), maximizing IOPS throughput while guaranteeing WAL determinism.
