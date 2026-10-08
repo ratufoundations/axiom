@@ -8,10 +8,12 @@
 
 pub mod coordinator;
 pub mod error;
+pub mod pipeline;
 pub mod validator;
 
 pub use coordinator::*;
 pub use error::*;
+pub use pipeline::*;
 pub use validator::*;
 
 #[cfg(test)]

@@ -116,10 +116,42 @@
 
 ---
 
+### Ticket OPT-ENGINE-01: 3-Stage Execution Pipeline & Lock Contention Elimination
+- **Target Subsystem**: `crates/axiom-engine`
+- **Status**: Validated & Merged
+- **Specification**: Multi-stage pipelined transaction execution engine decoupling cryptographic verification, state sequencing, and storage logging under bounded backpressure.
+
+#### Technical Invariants
+1. **3-Stage Decoupled Pipeline Architecture**:
+   - **Stage 1 (Parallel Stateless Cryptographic Verifiers)**: $N$ parallel worker threads verify Ed25519 signatures over the 97-byte signing payload, invariant non-zero amount, and non-identical sender/recipient. Bad transactions fail-fast at Stage 1 before reaching the sequencer.
+   - **Stage 2 (Single-Threaded Deterministic Sequencer)**: Exclusively owns `Keydir` in RAM without any `RwLock`/`Mutex` wrappers, completely eliminating thread contention on state mutations. Deterministically enforces account sequence numbers and balances, buffering mutations into `SequencedBatch`.
+   - **Stage 3 (Single-Threaded Batch Storage Writer)**: Exclusively owns `SegmentWriter`, receiving sequenced batches and committing records to physical disk with 128 KB buffer alignment and policy-based hardware synchronization (`sync_data`).
+2. **Bounded Backpressure & Queue Budgets**:
+   - `STAGE1_QUEUE_CAPACITY = 16_384`: Bounded input envelope buffer preventing unbounded memory growth under spike traffic.
+   - `STAGE2_QUEUE_CAPACITY = 16_384`: Verified transaction queue feeding the sequencer.
+   - `STAGE3_BATCH_MAX_SIZE = 400`: Maximum records per disk write batch, aligning with 64 KB / 128 KB filesystem buffer limits.
+3. **Fail-Fast Invariant Enforcement**:
+   - Invalid cryptographic signatures are rejected immediately at Stage 1; Stage 2 state and Stage 3 disk are untouched.
+   - Stale sequence numbers and insufficient balances fail fast at Stage 2 without modifying `Keydir` or submitting to Stage 3.
+4. **Graceful Cascading Shutdown**:
+   - Dropping input senders cleanly unblocks Stage 1 threads; their termination triggers Stage 2 final batch flush; Stage 2 termination triggers Stage 3 physical flush, footer sealing (`seal_segment`), and clean thread joining with zero leaks.
+
+#### Test Execution & Verification Results
+- **Test Suite**: `crates/axiom-engine/tests/test_pipeline.rs`
+- **Execution Latency**: 3.21s (5 integration tests)
+- **Pipeline Concurrency & Stress Metrics**:
+  - `test_pipeline_concurrent_valid_transactions`: 8 concurrent client threads submitted 50 valid transactions each (400 total transactions). All 400 transactions committed with zero errors. Monotonic sequence numbers (1..=50 per client) and 400 strictly contiguous, collision-free disk offsets ($42, 203, \dots, 64_281$). Final state balance and disk record count matched exactly 400.
+  - `test_pipeline_fail_fast_invalid_signature_at_stage1`: Corrupted transaction failed at Stage 1 with `EngineError::InvalidSignature`; subsequent valid transaction committed cleanly at offset 42.
+  - `test_pipeline_fail_fast_stale_sequence_at_stage2`: Duplicate sequence number rejected at Stage 2 with `EngineError::StaleSequenceNumber { expected: 2, found: 1 }`; subsequent transaction committed at offset 203, verifying no duplicate disk record was written.
+  - `test_pipeline_insufficient_balance_rejection_at_stage2`: Overdraft transaction rejected at Stage 2 with `EngineError::InsufficientBalance`; subsequent valid transaction committed at offset 42.
+  - `test_pipeline_graceful_shutdown_and_flush`: 20 transactions processed; shutdown completed cleanly; disk segment sealed with exact 88-byte footer, length 3,350 bytes, and 20 verified records.
+
+---
+
 ## Upcoming Tickets
 
-### Ticket OPT-ENGINE-01: Execution Pipeline & Lock Contention Elimination
-- **Target Subsystem**: `crates/axiom-engine`
+### Ticket OPT-INDEX-01: Keydir Memory Budget & Sparse Paging
+- **Target Subsystem**: `crates/axiom-index`
 - **Status**: Queued (Next Assignment)
-- **Specification**: Implement multi-stage pipelined transaction execution engine to decouple cryptographic signature validation, account balance indexing, and storage logging, eliminating lock contention.
+- **Specification**: Implement fixed RAM memory budgeting, LRU sparse paging, and cold state offloading to disk index segments.
 

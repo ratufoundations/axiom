@@ -1,7 +1,11 @@
+#![forbid(unsafe_code)]
+
 //! Modul penanganan galat mesin eksekusi dan orkestrasi Axiom.
 
 use core::fmt;
 use std::io;
+
+use axiom_primitives::value::AxmValue;
 
 /// Ragam galat pada proses validasi, eksekusi, persistensi, dan rotasi mesin.
 #[derive(Debug)]
@@ -18,6 +22,18 @@ pub enum EngineError {
     EpochRegression,
     /// Galat I/O sistem berkas lokal.
     IoError(io::Error),
+    /// Nomor urut (sequence number) mutasi usang atau duplikat.
+    StaleSequenceNumber { expected: u64, found: u64 },
+    /// Saldo akun pengirim tidak mencukupi untuk nominal transfer yang diminta.
+    InsufficientBalance { requested: AxmValue, available: AxmValue },
+    /// Mutasi transaksi tidak valid (misal: nominal 0, pengirim dan penerima sama).
+    InvalidTransaction(String),
+    /// Saluran antrean channel pipeline telah ditutup.
+    PipelineChannelClosed,
+    /// Antrean buffer channel pipeline telah penuh (bounded backpressure).
+    PipelineQueueFull,
+    /// Thread worker pipeline mengalami panik yang tidak diharapkan.
+    WorkerThreadPanicked,
 }
 
 impl fmt::Display for EngineError {
@@ -29,6 +45,21 @@ impl fmt::Display for EngineError {
             Self::InvalidSignature => write!(f, "Cryptographic signature verification failed"),
             Self::EpochRegression => write!(f, "Cannot rotate to an older or identical epoch number"),
             Self::IoError(e) => write!(f, "Engine I/O Error: {e}"),
+            Self::StaleSequenceNumber { expected, found } => {
+                write!(f, "Stale sequence number: expected {expected}, found {found}")
+            }
+            Self::InsufficientBalance { requested, available } => {
+                write!(
+                    f,
+                    "Insufficient balance: requested {}, available {}",
+                    requested.to_atomic(),
+                    available.to_atomic()
+                )
+            }
+            Self::InvalidTransaction(reason) => write!(f, "Invalid transaction: {reason}"),
+            Self::PipelineChannelClosed => write!(f, "Pipeline channel closed"),
+            Self::PipelineQueueFull => write!(f, "Pipeline bounded queue is full"),
+            Self::WorkerThreadPanicked => write!(f, "Pipeline worker thread panicked"),
         }
     }
 }
