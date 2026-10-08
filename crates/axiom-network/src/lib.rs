@@ -7,13 +7,17 @@
 
 pub mod codec;
 pub mod error;
+pub mod framed;
 pub mod message;
 pub mod peer;
+pub mod rate_limiter;
 
 pub use codec::*;
 pub use error::*;
+pub use framed::*;
 pub use message::*;
 pub use peer::*;
+pub use rate_limiter::*;
 
 #[cfg(test)]
 mod tests {

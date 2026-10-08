@@ -324,12 +324,49 @@
 
 ---
 
-## Upcoming Tickets
-
 ### Ticket OPT-NETWORK-01: Bounded TCP Flow Control & Rate Limiting
 - **Target Subsystem**: `crates/axiom-network`
+- **Status**: Validated & Merged
+- **Specification**: Bounded length-prefixed framing (64 KB maximum payload), socket timeout enforcement (5,000 ms read/write guard against slowloris), pure-integer token bucket rate limiting (zero float, millisecond tick accounting), per-peer rate limiting table, and bounded ingress backpressure channel (`sync_channel(4096)` mapping saturation to `ConnectionThrottled`).
+
+#### Technical Invariants
+1. **Bounded 4-Byte LE Framing**:
+   - Layout: 4-byte Little-Endian unsigned integer prefix (`u32`) for payload size.
+   - Limit: `MAX_FRAME_SIZE = 65_536` bytes (64 KB).
+   - Invariant: Framing decoder strictly checks `size <= MAX_FRAME_SIZE`. Payloads exceeding 64 KB are rejected immediately with `NetworkError::FrameTooLarge { size, max: 65_536 }` and the socket is closed defensively to eliminate memory explosion / buffer bloat risks.
+2. **Explicit Socket Timeout Guard**:
+   - Default: `DEFAULT_SOCKET_TIMEOUT_MS = 5_000` ms (5.0 seconds).
+   - Invariant: `set_read_timeout` and `set_write_timeout` applied at socket construction (`FramedStream::from_tcp`). Incomplete packet transmissions (such as slowloris attacks sending partial header bytes) deterministically yield `NetworkError::IoTimeout` without blocking server execution threads indefinitely.
+3. **Pure-Integer Token Bucket Rate Limiting (Zero Floating-Point)**:
+   - Structure: `TokenBucketLimiter` tracking `capacity`, `tokens`, `rate_per_sec`, and `last_refill_ms`.
+   - Refill Formula:
+     $$\Delta t = t_{\text{current}} - t_{\text{last}}$$
+     $$\text{added\_tokens} = \frac{\Delta t \times \text{rate\_per\_sec}}{1000}$$
+   - Exact Sub-Millisecond Time Conservation: When tokens replenish below capacity, `last_refill_ms` advances strictly by the accounted integer milliseconds $\frac{\text{added\_tokens} \times 1000}{\text{rate\_per\_sec}}$, avoiding truncation drift.
+   - Quota Enforcement: Exceeding available tokens rejects the request immediately with `NetworkError::RateLimitExceeded { peer }`.
+   - Peer Table Tracking: `PeerRateLimiterTable` manages token buckets indexed per peer identifier / IP address.
+4. **Bounded Ingress Channel & Backpressure Propagation**:
+   - Channel Capacity: `INGRESS_CHANNEL_CAPACITY = 4_096` bounded entries (`sync_channel`).
+   - Backpressure Invariant: `IngressReceiver` attempts non-blocking queue ingestion (`try_send`). When downstream verifiers/sequencers saturate the channel buffer, incoming network packets fail fast with `NetworkError::ConnectionThrottled`, pausing the network socket reader and naturally shrinking the OS TCP receive window to halt sender transmission at kernel level.
+
+#### Test Execution & Verification Results
+- **Test Suite**: `crates/axiom-network/tests/test_flow_control.rs`
+- **Execution Latency**: 0.52s (4 integration tests)
+- **Flow Control & Rate Limiting Metrics**:
+  - `test_token_bucket_rate_limiter_burst_and_refill`: Initialized limiter with capacity 10 and rate 10/s; consumed 10 tokens immediately; verified 11th token rejected with `RateLimitExceeded`; advanced simulated time by 300 ms; verified exactly 3 tokens replenished; consumed 3 tokens and verified subsequent attempt rejected.
+  - `test_framed_stream_rejects_oversized_frame`: Tested writer and reader against 65,537-byte payload (> 64 KB); verified writer and reader return `FrameTooLarge { size: 65537, max: 65536 }` and close connection.
+  - `test_slow_read_socket_timeout_enforcement`: Mock TCP client connected to server with 500 ms read timeout and sent 1 byte before halting; verified server read terminates after ~500 ms with `NetworkError::IoTimeout` without hanging.
+  - `test_bounded_ingress_backpressure_propagation`: Initialized bounded ingress channel of capacity 4; pushed 4 packets cleanly; verified 5th packet rejected with `NetworkError::ConnectionThrottled`; drained 1 packet downstream and verified 5th packet successfully accepted.
+
+---
+
+## Upcoming Tickets
+
+### Ticket E2E-BENCH-01: End-to-End Stress Test & Throughput Saturation
+- **Target Subsystem**: `bin/axiom-node`, `crates/axiom-engine`
 - **Status**: Queued (Next Assignment)
-- **Specification**: Implement bounded TCP receive windows, per-peer token bucket rate limiting, and backpressure propagation to consensus engine.
+- **Specification**: Construct full end-to-end integration stress tests exercising concurrent network transaction ingress, multi-stage pipelined verification and sequencing, append-only storage commits, and consensus rounds under maximum saturation.
+
 
 
 
