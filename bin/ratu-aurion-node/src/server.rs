@@ -95,9 +95,12 @@ impl NodeServer {
             // 2. Menerima koneksi baru non-blocking
             match listener.accept() {
                 Ok((mut stream, peer_addr)) => {
-                    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-                    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
-                    let _ = self.handle_incoming_stream(&mut stream, peer_addr);
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(Duration::from_millis(2000)));
+                    let _ = stream.set_write_timeout(Some(Duration::from_millis(2000)));
+                    if let Err(e) = self.handle_incoming_stream(&mut stream, peer_addr) {
+                        eprintln!("[SERVER ERROR] handle_incoming_stream failed: {e:?}");
+                    }
                 }
                 Err(ref e)
                     if e.kind() == std::io::ErrorKind::WouldBlock

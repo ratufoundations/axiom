@@ -12,5 +12,5 @@ Dokumen cetak blueprint dan pelacak tugas rekayasa sistem untuk proyek blockchai
 | TR-06 | Consensus | Penegakan aturan komitmen jaringan, validasi finalitas blok, algoritma konsensus modular, dan integritas state commitment. | None | Tervalidasi |
 | TR-07 | Network | Protokol komunikasi data P2P, serialization framing, transport abstraction layer, penanganan koneksi peer, dan propagasi pesan. | None | Tervalidasi |
 | TR-08 | Node | Integrasi runtime simpul biner utama (ratu-aurion-node), loop server TCP P2P, pipeline handler, dan graceful shutdown. | TR-01 - TR-07 | Tervalidasi |
-| TR-09 | CLI | Antarmuka baris perintah (CLI) dompet, deterministik decimal-to-atomic parsing, manajemen kunci, dan pengiriman mutasi TCP. | TR-01, TR-07, TR-08 | Tervalidasi |
-| REFACTOR-REBRAND-01 | Workspace Rebranding | Rebranding menyeluruh workspace dan protokol biner ke Ratu Aurion Protocol (`ratu-aurion-*`, ticker `AUR`, `AurValue`, magic bytes baru). | None | Dalam Pengerjaan |
+| REFACTOR-REBRAND-01 | Workspace Rebranding | Rebranding menyeluruh workspace dan protokol biner ke Ratu Aurion Protocol (`ratu-aurion-*`, ticker `AUR`, `AurValue`, magic bytes baru). | None | Tervalidasi |
+| E2E-BENCH-01 | E2E Benchmark | End-to-end stress test dan saturasi throughput pipeline in-memory, loopback socket TCP, serta ketahanan injeksi anomali. | TR-05, TR-07, TR-08 | Tervalidasi |
