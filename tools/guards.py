@@ -34,7 +34,7 @@ def detect_active_task() -> str:
     content = task_file.read_text(encoding="utf-8")
     for line in content.splitlines():
         if "Dalam Pengerjaan" in line or "In Progress" in line or "Review" in line:
-            match = re.search(r"TR-\d+", line)
+            match = re.search(r"(?:REFACTOR-REBRAND-\d+|OPT-[A-Z]+-\d+|TR-\d+)", line)
             if match:
                 return match.group(0)
     return "MISC"
@@ -85,7 +85,7 @@ def write_audit_log(task_id: str, files_scanned: int, check_res: str, clippy_res
 
     log_entry = f"""
 ================================================================================
-FAKTA AUDIT OTOMATIS AXIOM - {timestamp}
+FAKTA AUDIT OTOMATIS RATU AURION - {timestamp}
 TASK TERDETEKSI: {task_id}
 ================================================================================
 
@@ -116,7 +116,7 @@ Semua gerbang verifikasi lolos secara deterministik.
     log(f"Fakta audit otomatis berhasil dicatat ke '{log_file.relative_to(ROOT_DIR)}'.")
 
 def main():
-    log("=== MEMULAI GERBANG AUDIT OTOMATIS AXIOM ===")
+    log("=== MEMULAI GERBANG AUDIT OTOMATIS RATU AURION ===")
     task_id = detect_active_task()
 
     # 1. Audit Statis
@@ -153,7 +153,8 @@ def main():
         return
 
     subprocess.run(["git", "add", "-A"], cwd=ROOT_DIR, check=True)
-    commit_msg = os.environ.get("GUARD_COMMIT_MSG", f"chore({task_id.lower()}): automated verified update under guards")
+    default_msg = f"chore({task_id.lower()}): automated verified update under guards"
+    commit_msg = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("GUARD_COMMIT_MSG", default_msg)
     subprocess.run(["git", "commit", "-m", commit_msg], cwd=ROOT_DIR, check=True)
     subprocess.run(["git", "push"], cwd=ROOT_DIR, check=True)
     log("Perubahan berhasil dikomit dan didorong ke remote repository.")

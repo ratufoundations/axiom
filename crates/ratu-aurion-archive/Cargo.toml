@@ -1,0 +1,12 @@
+[package]
+name = "ratu-aurion-archive"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratu-aurion-primitives = { path = "../ratu-aurion-primitives" }
+ratu-aurion-storage = { path = "../ratu-aurion-storage" }
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

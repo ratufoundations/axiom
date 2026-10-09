@@ -17,8 +17,8 @@ NUM_CLIENTS = 16
 TX_PER_CLIENT = 100
 
 BIN_EXT = ".exe" if os.name == "nt" else ""
-NODE_BIN = ROOT_DIR / "target" / "release" / f"axiom-node{BIN_EXT}"
-CLI_BIN = ROOT_DIR / "target" / "release" / f"axiom-cli{BIN_EXT}"
+NODE_BIN = ROOT_DIR / "target" / "release" / f"ratu-aurion-node{BIN_EXT}"
+CLI_BIN = ROOT_DIR / "target" / "release" / f"ratu-aurion-cli{BIN_EXT}"
 
 def log(msg: str):
     print(f"[STRESS-TEST] {msg}")
@@ -28,8 +28,8 @@ def fail(msg: str):
     sys.exit(1)
 
 def ensure_binaries():
-    log("Mengompilasi biner axiom-node dan axiom-cli dengan profil rilis...")
-    cmd = ["cargo", "build", "--release", "-p", "axiom-node", "-p", "axiom-cli"]
+    log("Mengompilasi biner ratu-aurion-node dan ratu-aurion-cli dengan profil rilis...")
+    cmd = ["cargo", "build", "--release", "-p", "ratu-aurion-node", "-p", "ratu-aurion-cli"]
     res = subprocess.run(cmd, cwd=ROOT_DIR)
     if res.returncode != 0:
         fail("Gagal mengompilasi biner release.")
@@ -94,7 +94,7 @@ def run_stress_test():
     ensure_binaries()
     setup_environment()
 
-    log("Menyalakan simpul axiom-node pada port 9005...")
+    log("Menyalakan simpul ratu-aurion-node pada port 9005...")
     node_cmd = [
         str(NODE_BIN),
         "--data-dir", str(NODE_DATA_DIR),

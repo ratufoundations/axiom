@@ -1,0 +1,12 @@
+[package]
+name = "ratu-aurion-network"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratu-aurion-primitives = { path = "../ratu-aurion-primitives" }
+ratu-aurion-consensus = { path = "../ratu-aurion-consensus" }
+blake3 = { version = "1.5", default-features = false, features = ["pure"] }
+
+[lints]
+workspace = true

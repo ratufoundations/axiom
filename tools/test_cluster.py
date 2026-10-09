@@ -49,7 +49,7 @@ def generate_wallets():
     for node in NODES:
         key_path = CLUSTER_DIR / f"node{node['id']}" / "wallets" / "validator.key"
         cmd = [
-            "cargo", "run", "--quiet", "-p", "axiom-cli", "--",
+            "cargo", "run", "--quiet", "-p", "ratu-aurion-cli", "--",
             "keygen", "--out", str(key_path)
         ]
         res = subprocess.run(cmd, cwd=ROOT_DIR, capture_output=True, text=True)
@@ -62,7 +62,7 @@ def generate_wallets():
     for client in ["alice", "bob"]:
         key_path = client_dir / f"{client}.key"
         res = subprocess.run(
-            ["cargo", "run", "--quiet", "-p", "axiom-cli", "--", "keygen", "--out", str(key_path)],
+            ["cargo", "run", "--quiet", "-p", "ratu-aurion-cli", "--", "keygen", "--out", str(key_path)],
             cwd=ROOT_DIR, capture_output=True, text=True
         )
         if res.returncode != 0:
@@ -70,7 +70,7 @@ def generate_wallets():
 
 def get_account_id(key_path: Path) -> str:
     res = subprocess.run(
-        ["cargo", "run", "--quiet", "-p", "axiom-cli", "--", "inspect", "--key", str(key_path)],
+        ["cargo", "run", "--quiet", "-p", "ratu-aurion-cli", "--", "inspect", "--key", str(key_path)],
         cwd=ROOT_DIR, capture_output=True, text=True
     )
     if res.returncode != 0:
@@ -81,12 +81,12 @@ def get_account_id(key_path: Path) -> str:
     fail(f"Account ID tidak ditemukan pada output {key_path}")
 
 def start_nodes() -> list[subprocess.Popen]:
-    log("Menyalakan 4 simpul axiom-node...")
+    log("Menyalakan 4 simpul ratu-aurion-node...")
     processes = []
     for node in NODES:
         node_dir = CLUSTER_DIR / f"node{node['id']}"
         cmd = [
-            "cargo", "run", "--quiet", "-p", "axiom-node", "--",
+            "cargo", "run", "--quiet", "-p", "ratu-aurion-node", "--",
             "--data-dir", str(node_dir / "data"),
             "--archive-dir", str(node_dir / "archive"),
             "--listen", f"127.0.0.1:{node['port']}",
@@ -122,9 +122,9 @@ def execute_integration_stages(procs: list[subprocess.Popen]):
     # -------------------------------------------------------------------------
     # TAHAP 1: Injeksi Mutasi Transaksi ke Node 1
     # -------------------------------------------------------------------------
-    log("\n--- TAHAP 1: Injeksi Transaksi melalui axiom-cli ke Node 1 ---")
+    log("\n--- TAHAP 1: Injeksi Transaksi melalui ratu-aurion-cli ke Node 1 ---")
     transfer_cmd = [
-        "cargo", "run", "--quiet", "-p", "axiom-cli", "--",
+        "cargo", "run", "--quiet", "-p", "ratu-aurion-cli", "--",
         "transfer",
         "--key", str(alice_key),
         "--to", bob_acc,
@@ -136,7 +136,7 @@ def execute_integration_stages(procs: list[subprocess.Popen]):
     res = subprocess.run(transfer_cmd, cwd=ROOT_DIR, capture_output=True, text=True)
     log(f"Status Output CLI:\n{res.stdout.strip()}")
     if res.returncode != 0:
-        fail(f"Pengiriman transaksi via axiom-cli gagal:\n{res.stderr}")
+        fail(f"Pengiriman transaksi via ratu-aurion-cli gagal:\n{res.stderr}")
 
     # -------------------------------------------------------------------------
     # TAHAP 2: Audit Penulisan Fisik Disk pada Node 1
@@ -175,7 +175,7 @@ def execute_integration_stages(procs: list[subprocess.Popen]):
     log("Kuorum tetap terpenuhi secara deterministik (3 >= 3). Sistem tetap final.")
 
 def main():
-    log("=== MEMULAI PENGUJIAN INTEGRASI MULTI-NODE AXIOM (4 SIMPUL) ===")
+    log("=== MEMULAI PENGUJIAN INTEGRASI MULTI-NODE RATU AURION (4 SIMPUL) ===")
     setup_directories()
     generate_wallets()
     procs = start_nodes()

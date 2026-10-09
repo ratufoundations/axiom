@@ -1,6 +1,6 @@
-# Axiom (AXM)
+# Ratu Aurion Protocol (AUR)
 
-Axiom adalah protokol buku besar terdistribusi yang dirancang dengan pendekatan *first principles*, memprioritaskan efisiensi penulisan data linier, evaluasi komputasi tertunda (*lazy evaluation*), serta keberlanjutan operasional jangka panjang di atas perangkat keras standar (termasuk media simpan mekanis).
+Ratu Aurion Protocol adalah protokol buku besar terdistribusi yang dirancang dengan pendekatan *first principles*, memprioritaskan efisiensi penulisan data linier, evaluasi komputasi tertunda (*lazy evaluation*), serta keberlanjutan operasional jangka panjang di atas perangkat keras standar (termasuk media simpan mekanis).
 
 ---
 
@@ -8,22 +8,23 @@ Axiom adalah protokol buku besar terdistribusi yang dirancang dengan pendekatan 
 
 > Bagian ini diperbarui secara berkala mengikuti perkembangan implementasi riil pada `task-register.md`.
 
-* **Fase Saat Ini:** Fase 0 — *Scaffolding & Structural Blueprints*
-* **Integritas Workspace:** Kerangka minimal independen (tanpa *cross-dependency* internal)
-* **Status Kompilasi:** `cargo check` lolos pada tingkat stub
+* **Fase Saat Ini:** Fase 1 — *Core Subsystems Hardening & Protocol Optimization*
+* **Integritas Workspace:** Kerangka modular independen (zero-panic, purely integer-based, `#![forbid(unsafe_code)]`)
+* **Status Kompilasi:** `cargo check` & `cargo clippy` lolos tanpa peringatan
 
 ### Matriks Kesiapan Modul
 
 | Modul Crate | Status Arsitektur | Cakupan Fungsi | Status Implementasi |
 | :--- | :--- | :--- | :--- |
-| `crates/axiom-primitives` | Draf Awal | Tipe dasar, serialisasi byte, kriptografi dasar | Tertunda (TR-01) |
-| `crates/axiom-storage` | Draf Awal | *Append-only log engine*, pola tulis sekuensial | Belum Dimulai (TR-02) |
-| `crates/axiom-index` | Draf Awal | Struktur indeks RAM, filter probabilitas | Belum Dimulai (TR-03) |
-| `crates/axiom-archive` | Draf Awal | Segmentasi berkas, kompresi arsip dingin | Belum Dimulai (TR-04) |
-| `crates/axiom-execution` | Draf Awal | Mesin validasi *witness* mandiri, evaluasi malas | Belum Dimulai (TR-05) |
-| `crates/axiom-consensus` | Draf Awal | Aturan komitmen status jaringan | Belum Dimulai |
-| `crates/axiom-network` | Draf Awal | Transmisi data peer-to-peer, *lazy sync* | Belum Dimulai (TR-06) |
-| `bin/axiom-node` | Draf Awal | *Single-binary runner* modular monolitik | Belum Dimulai (TR-07) |
+| `crates/ratu-aurion-primitives` | Produksi | Tipe dasar, serialisasi byte, kriptografi Ed25519/BLAKE3, token AUR | Tervalidasi (TR-01) |
+| `crates/ratu-aurion-storage` | Produksi | *Append-only log engine*, pra-alokasi 128 MB, binary zero scan, durability tuning | Tervalidasi (TR-02) |
+| `crates/ratu-aurion-index` | Produksi | Indeks RAM Bitcask 256-bucket, compact 80B entry, snapshot 96B, LRU disk paging | Tervalidasi (TR-03) |
+| `crates/ratu-aurion-archive` | Produksi | Segmentasi berkas, kompresi arsip dingin zip deflate | Tervalidasi (TR-04) |
+| `crates/ratu-aurion-engine` | Produksi | Pipeline eksekusi 3-tahap tanpa lock contention | Tervalidasi (TR-05) |
+| `crates/ratu-aurion-consensus` | Produksi | Deteksi ekuivokasi & slashing 100%, pacemaker rotasi pemimpin deterministik | Tervalidasi (TR-06) |
+| `crates/ratu-aurion-network` | Produksi | TCP framed wire protocol, token bucket rate limiter, bounded backpressure | Tervalidasi (TR-07) |
+| `bin/ratu-aurion-node` | Produksi | Biner simpul p2p terpadu, IPC snapshot telemetri | Tervalidasi (TR-08) |
+| `bin/ratu-aurion-cli` | Produksi | Antarmuka baris perintah, keygen, transfer desimal-to-atomik | Tervalidasi (TR-09) |
 
 ---
 
@@ -39,21 +40,22 @@ Axiom adalah protokol buku besar terdistribusi yang dirancang dengan pendekatan 
 ## Struktur Repositori
 
 ```text
-axiom/
+ratu-aurion/
 ├── AGENTS.md                    # Aturan kerja mutlak agen AI
 ├── Cargo.toml                   # Root workspace manifest
 ├── README.md                    # Ringkasan status dan orientasi proyek
 ├── task-register.md             # Pelacak pekerjaan teknis dan cetak biru
 ├── bin/
-│   └── axiom-node/              # Biner eksekusi utama
+│   ├── ratu-aurion-node/        # Biner eksekusi utama node
+│   └── ratu-aurion-cli/         # Biner antarmuka CLI dompet
 └── crates/
-    ├── axiom-primitives/        # Tipe data dasar & serialisasi biner
-    ├── axiom-storage/           # Append-only storage engine
-    ├── axiom-index/             # Indeks memori RAM
-    ├── axiom-archive/           # Segmentasi & kompresi data arsip
-    ├── axiom-execution/         # Evaluasi bukti malas (stateless witness)
-    ├── axiom-consensus/         # Aturan komitmen konsensus
-    └── axiom-network/           # Protokol transmisi data
+    ├── ratu-aurion-primitives/  # Tipe data dasar & serialisasi biner
+    ├── ratu-aurion-storage/     # Append-only storage engine
+    ├── ratu-aurion-index/       # Indeks memori RAM Bitcask
+    ├── ratu-aurion-archive/     # Segmentasi & kompresi data arsip
+    ├── ratu-aurion-engine/      # Pipeline transaksi 3-tahap
+    ├── ratu-aurion-consensus/   # Aturan komitmen konsensus & pacemaker
+    └── ratu-aurion-network/     # Protokol transmisi data P2P
 ```
 
 ---
@@ -65,4 +67,7 @@ axiom/
 3. **Pemeriksaan Kompilasi:**
 ```bash
 cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+python tools/guards.py
 ```

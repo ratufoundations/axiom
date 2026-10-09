@@ -1,9 +1,16 @@
 [workspace]
-resolver = "2"
 members = [
-    "bin/*",
-    "crates/*",
+    "crates/ratu-aurion-primitives",
+    "crates/ratu-aurion-storage",
+    "crates/ratu-aurion-index",
+    "crates/ratu-aurion-engine",
+    "crates/ratu-aurion-consensus",
+    "crates/ratu-aurion-network",
+    "crates/ratu-aurion-archive",
+    "bin/ratu-aurion-node",
+    "bin/ratu-aurion-cli",
 ]
+resolver = "2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -14,4 +21,3 @@ float_cmp = "deny"
 float_cmp_const = "deny"
 suboptimal_flops = "deny"
 imprecise_flops = "deny"
-

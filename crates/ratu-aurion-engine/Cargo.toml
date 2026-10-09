@@ -1,0 +1,14 @@
+[package]
+name = "ratu-aurion-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratu-aurion-primitives = { path = "../ratu-aurion-primitives" }
+ratu-aurion-storage = { path = "../ratu-aurion-storage" }
+ratu-aurion-index = { path = "../ratu-aurion-index" }
+ratu-aurion-archive = { path = "../ratu-aurion-archive" }
+ed25519-dalek = { version = "2.1", default-features = false }
+
+[lints]
+workspace = true

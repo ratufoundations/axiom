@@ -1,0 +1,15 @@
+[package]
+name = "ratu-aurion-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratu-aurion-primitives = { path = "../../crates/ratu-aurion-primitives" }
+ratu-aurion-network = { path = "../../crates/ratu-aurion-network" }
+ed25519-dalek = { version = "2.1", default-features = false }
+
+[dev-dependencies]
+ratu-aurion-engine = { path = "../../crates/ratu-aurion-engine" }
+
+[lints]
+workspace = true
