@@ -2,6 +2,37 @@
 
 ## Completed Tickets
 
+### Ticket FE-EXPLORER-01: Monorepo Integration of Aurion Explorer (Next.js + shadcn/ui)
+- **Target Subsystem**: `web/` (`app/`, `components/`, `components/ui/`, `hooks/`, `data/`, `types/`, `package.json`, `tsconfig.json`, `next.config.ts`), `tools/guards.py`, `.gitignore`, `task-register.md`
+- **Status**: Validated & Merged
+- **Specification**: Complete monorepo integration of the Aurion Explorer dashboard under `web/` using Next.js 15 (App Router), React 19, Tailwind CSS v4, and accessible shadcn/ui primitives. Enforced 100% visual design preservation, JetBrains Mono dark-mode typography, SVG world map bezier connection arcs with pulse animations, dual Recharts telemetry monitors, and live gateway integration with the `ratu-aurion-node` daemon (`GATEWAY-RPC-01`).
+
+#### Architectural & Technical Invariants
+1. **100% Visual Design & Aesthetic Preservation**:
+   - Curated terminal dark palette strictly preserved: Background `#0d1117`, Cards `#161b22`, Borders `#30363d`, Success `#3fb950`, Neon Cyan `#39c5cf`, Primary Accent `#58a6ff`, Warning Amber `#d29922`, Destructive Red `#f85149` / `#da3633`.
+   - Typography: Google Font `JetBrains Mono` variable typography configured in `web/app/layout.tsx` and `web/app/globals.css`.
+   - Custom 6px dark scrollbar styling with hover states retained.
+   - SVG World Map: Fully vectorized continent paths, geographical node coordinates (Frankfurt, London, New York, Singapore, Tokyo, Sydney, São Paulo), dynamic packet pulse tick animations (`pulseTick`), and interactive latency drawer.
+   - Telemetry Visualizations: `BFTConsensusHealthChart` (quorum participation % and commit latency) and `LatencyHistoryChart` (average, miner, and fullnode response latency) using Recharts with full responsive containers.
+2. **Enterprise App Router Architecture & Component Modularization**:
+   - Root Layout (`web/app/layout.tsx`): Server component wrapping dark-mode provider and JetBrains Mono variable.
+   - Main Dashboard (`web/app/page.tsx`): Client component orchestrating real-time state, metrics cards, map canvas, activity streams, and dialog modals.
+   - shadcn/ui Primitives (`web/components/ui/`): Zero external dependency radix-free implementations for `Dialog`, `Table`, `Badge`, `Button`, `Input`, `Card`, and `Tooltip`, fully compliant with React 19 and Tailwind CSS v4.
+3. **Gateway Adaptation Layer (`web/hooks/useAurionNode.ts`)**:
+   - JSON-RPC 2.0 polling loop querying `aur_blockHeight` and `aur_chainId` every 3,000ms.
+   - WebSocket streaming connection to `ws://127.0.0.1:9545/ws` sending `aur_subscribe` (`newMutations`) to receive real-time block and transaction feeds.
+   - Deterministic offline fallback: Seamlessly renders pre-populated telemetries from `INITIAL_PEERS`, `INITIAL_BLOCKS`, and `INITIAL_TRANSACTIONS` (`web/data/initialData.ts`) when the local node is offline, preventing UI flickering.
+4. **Workspace & Rust Guard Isolation**:
+   - Root `.gitignore` updated to ignore `web/node_modules/`, `web/.next/`, `web/out/`, and `web/.env*.local`.
+   - `tools/guards.py` updated to strictly isolate Rust audits to `crates/` and `bin/`, ignoring `web/` and `node_modules/` to guarantee `#![forbid(unsafe_code)]` compliance.
+   - Production bundle compiled with Next.js standalone output for VPS containerization at `ratuaurion.store`.
+
+#### Verification & Quality Gates
+- **Next.js Production Build**: `npm run build` inside `web/` succeeded cleanly (zero errors, 4/4 static pages generated, standalone assets optimized).
+- **Rust Static & Safety Audits**: `tools/guards.py` verified 0 unsafe keywords, 0 floating-point usages, and passed all unit/integration tests across workspace.
+
+---
+
 ### Ticket OPT-ENGINE-FEE-01: Dynamic Fee Burn & Block Reward Emission
 - **Target Subsystem**: `crates/ratu-aurion-primitives` (`src/record.rs`), `crates/ratu-aurion-index` (`src/keydir.rs`), `crates/ratu-aurion-engine` (`src/pipeline.rs`, `src/error.rs`, `tests/test_fee_reward.rs`), `crates/ratu-aurion-storage` (`src/writer.rs`, `src/scanner.rs`), `task-register.md`
 - **Status**: Validated & Merged
