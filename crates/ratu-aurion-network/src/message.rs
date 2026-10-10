@@ -1,7 +1,9 @@
 //! Modul definisi varian pesan protokol biner Axiom Network.
 
 use ratu_aurion_consensus::certificate::QuorumCertificate;
+use ratu_aurion_consensus::evidence::VoteRecord;
 use ratu_aurion_consensus::proposal::SegmentProposal;
+use ratu_aurion_consensus::timeout::{TimeoutCertificate, TimeoutMsg};
 use ratu_aurion_consensus::vote::Vote;
 use ratu_aurion_primitives::record::MutationRecord;
 
@@ -19,6 +21,12 @@ pub const MSG_SYNC_CHUNK: u8 = 0x05;
 pub const MSG_TX_SUBMIT: u8 = 0x06;
 /// Pengenal tipe pesan untuk TxResult (0x07).
 pub const MSG_TX_RESULT: u8 = 0x07;
+/// Pengenal tipe pesan untuk VoteRecord (0x08).
+pub const MSG_VOTE_RECORD: u8 = 0x08;
+/// Pengenal tipe pesan untuk TimeoutMsg (0x09).
+pub const MSG_TIMEOUT: u8 = 0x09;
+/// Pengenal tipe pesan untuk TimeoutCertificate (0x0A).
+pub const MSG_TIMEOUT_CERTIFICATE: u8 = 0x0a;
 
 /// Seluruh varian pesan yang dapat ditransmisikan melintasi protokol jaringan P2P Axiom.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +68,12 @@ pub enum NetworkMessage {
         /// Pesan status atau alasan penolakan jika gagal.
         message: String,
     },
+    /// Rekaman suara individu dari validator pada slot tertentu (epoch, round).
+    VoteRecord(VoteRecord),
+    /// Pesan pemberitahuan timeout yang disiarkan validator saat timer ronde habis.
+    Timeout(TimeoutMsg),
+    /// Sertifikat timeout yang membuktikan bahwa supermayoritas validator sepakat berganti ronde.
+    TimeoutCertificate(TimeoutCertificate),
 }
 
 impl NetworkMessage {
@@ -74,6 +88,9 @@ impl NetworkMessage {
             Self::SyncChunk { .. } => MSG_SYNC_CHUNK,
             Self::TxSubmit(_) => MSG_TX_SUBMIT,
             Self::TxResult { .. } => MSG_TX_RESULT,
+            Self::VoteRecord(_) => MSG_VOTE_RECORD,
+            Self::Timeout(_) => MSG_TIMEOUT,
+            Self::TimeoutCertificate(_) => MSG_TIMEOUT_CERTIFICATE,
         }
     }
 }

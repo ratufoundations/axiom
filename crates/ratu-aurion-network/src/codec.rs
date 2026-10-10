@@ -1,9 +1,14 @@
+#![forbid(unsafe_code)]
+
 //! Modul enkoder dan dekoder biner deterministik berbasis FrameHeader Axiom.
 
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
 
 use ratu_aurion_consensus::certificate::QuorumCertificate;
+use ratu_aurion_consensus::evidence::VoteRecord;
 use ratu_aurion_consensus::proposal::{SegmentProposal, PROPOSAL_SIGNING_SIZE};
+use ratu_aurion_consensus::timeout::{TimeoutCertificate, TimeoutMsg};
 use ratu_aurion_consensus::vote::Vote;
 use ratu_aurion_primitives::crypto::{AccountId, Hash, Signature};
 use ratu_aurion_primitives::framing::{FrameHeader, HEADER_SIZE};
@@ -11,8 +16,8 @@ use ratu_aurion_primitives::record::{MutationRecord, RECORD_SIZE};
 
 use crate::error::NetworkError;
 use crate::message::{
-    NetworkMessage, MSG_CERTIFICATE, MSG_PROPOSAL, MSG_SYNC_CHUNK, MSG_SYNC_REQ, MSG_TX_RESULT,
-    MSG_TX_SUBMIT, MSG_VOTE,
+    NetworkMessage, MSG_CERTIFICATE, MSG_PROPOSAL, MSG_SYNC_CHUNK, MSG_SYNC_REQ, MSG_TIMEOUT,
+    MSG_TIMEOUT_CERTIFICATE, MSG_TX_RESULT, MSG_TX_SUBMIT, MSG_VOTE, MSG_VOTE_RECORD,
 };
 
 /// Versi default frame transmisi jaringan.
@@ -86,6 +91,31 @@ pub fn encode_message(msg: &NetworkMessage) -> Result<Vec<u8>, NetworkError> {
             payload.extend_from_slice(&msg_len.to_le_bytes());
             payload.extend_from_slice(msg_bytes);
         }
+        NetworkMessage::VoteRecord(vr) => {
+            payload.extend_from_slice(vr.validator.as_bytes());
+            payload.extend_from_slice(&vr.epoch.to_le_bytes());
+            payload.extend_from_slice(&vr.round.to_le_bytes());
+            payload.extend_from_slice(vr.block_hash.as_bytes());
+            payload.extend_from_slice(vr.signature.as_bytes());
+        }
+        NetworkMessage::Timeout(t) => {
+            payload.extend_from_slice(&t.epoch.to_le_bytes());
+            payload.extend_from_slice(&t.round.to_le_bytes());
+            payload.extend_from_slice(&t.high_qc_round.to_le_bytes());
+            payload.extend_from_slice(t.validator.as_bytes());
+            payload.extend_from_slice(t.signature.as_bytes());
+        }
+        NetworkMessage::TimeoutCertificate(tc) => {
+            payload.extend_from_slice(&tc.epoch.to_le_bytes());
+            payload.extend_from_slice(&tc.round.to_le_bytes());
+            payload.extend_from_slice(&tc.high_qc_round.to_le_bytes());
+            let count = tc.signatures.len() as u32;
+            payload.extend_from_slice(&count.to_le_bytes());
+            for (validator, sig) in &tc.signatures {
+                payload.extend_from_slice(validator.as_bytes());
+                payload.extend_from_slice(sig.as_bytes());
+            }
+        }
     }
 
     // Hitung intisari BLAKE3 untuk payload
@@ -109,7 +139,7 @@ pub fn encode_message(msg: &NetworkMessage) -> Result<Vec<u8>, NetworkError> {
 /// Mendekode dan memverifikasi paket data biner menjadi varian `NetworkMessage` yang sesuai.
 ///
 /// Melakukan validasi ketat:
-/// 1. Verifikasi integritas header 42 byte dan magic bytes `AXM\x01`.
+/// 1. Verifikasi integritas header 42 byte dan magic bytes `AUR\x01`.
 /// 2. Verifikasi kesesuaian BLAKE3 checksum payload.
 /// 3. Validasi struktural data payload berdasarkan Type ID.
 pub fn decode_message(bytes: &[u8]) -> Result<NetworkMessage, NetworkError> {
@@ -316,6 +346,154 @@ pub fn decode_message(bytes: &[u8]) -> Result<NetworkMessage, NetworkError> {
                 message,
             })
         }
+        MSG_VOTE_RECORD => {
+            // VoteRecord: 32 (validator) + 8 (epoch) + 8 (round) + 32 (block_hash) + 64 (sig) = 144 byte
+            if body.len() != 144 {
+                return Err(NetworkError::MalformedPayload);
+            }
+            let mut val_bytes = [0u8; 32];
+            val_bytes.copy_from_slice(&body[0..32]);
+            let validator = AccountId::new(val_bytes);
+
+            let mut epoch_bytes = [0u8; 8];
+            epoch_bytes.copy_from_slice(&body[32..40]);
+            let epoch = u64::from_le_bytes(epoch_bytes);
+
+            let mut round_bytes = [0u8; 8];
+            round_bytes.copy_from_slice(&body[40..48]);
+            let round = u64::from_le_bytes(round_bytes);
+
+            let mut hash_bytes = [0u8; 32];
+            hash_bytes.copy_from_slice(&body[48..80]);
+            let block_hash = Hash::new(hash_bytes);
+
+            let mut sig_bytes = [0u8; 64];
+            sig_bytes.copy_from_slice(&body[80..144]);
+            let signature = Signature::new(sig_bytes);
+
+            Ok(NetworkMessage::VoteRecord(VoteRecord::new(
+                validator,
+                epoch,
+                round,
+                block_hash,
+                signature,
+            )))
+        }
+        MSG_TIMEOUT => {
+            // Timeout: 8 (epoch) + 8 (round) + 8 (high_qc_round) + 32 (validator) + 64 (sig) = 120 byte
+            if body.len() != 120 {
+                return Err(NetworkError::MalformedPayload);
+            }
+            let mut epoch_bytes = [0u8; 8];
+            epoch_bytes.copy_from_slice(&body[0..8]);
+            let epoch = u64::from_le_bytes(epoch_bytes);
+
+            let mut round_bytes = [0u8; 8];
+            round_bytes.copy_from_slice(&body[8..16]);
+            let round = u64::from_le_bytes(round_bytes);
+
+            let mut high_qc_bytes = [0u8; 8];
+            high_qc_bytes.copy_from_slice(&body[16..24]);
+            let high_qc_round = u64::from_le_bytes(high_qc_bytes);
+
+            let mut val_bytes = [0u8; 32];
+            val_bytes.copy_from_slice(&body[24..56]);
+            let validator = AccountId::new(val_bytes);
+
+            let mut sig_bytes = [0u8; 64];
+            sig_bytes.copy_from_slice(&body[56..120]);
+            let signature = Signature::new(sig_bytes);
+
+            Ok(NetworkMessage::Timeout(TimeoutMsg::new(
+                validator,
+                epoch,
+                round,
+                high_qc_round,
+                signature,
+            )))
+        }
+        MSG_TIMEOUT_CERTIFICATE => {
+            // Minimal: 8 (epoch) + 8 (round) + 8 (high_qc_round) + 4 (sig_count) = 28 byte
+            if body.len() < 28 {
+                return Err(NetworkError::MalformedPayload);
+            }
+            let mut epoch_bytes = [0u8; 8];
+            epoch_bytes.copy_from_slice(&body[0..8]);
+            let epoch = u64::from_le_bytes(epoch_bytes);
+
+            let mut round_bytes = [0u8; 8];
+            round_bytes.copy_from_slice(&body[8..16]);
+            let round = u64::from_le_bytes(round_bytes);
+
+            let mut high_qc_bytes = [0u8; 8];
+            high_qc_bytes.copy_from_slice(&body[16..24]);
+            let high_qc_round = u64::from_le_bytes(high_qc_bytes);
+
+            let mut count_bytes = [0u8; 4];
+            count_bytes.copy_from_slice(&body[24..28]);
+            let sig_count = u32::from_le_bytes(count_bytes) as usize;
+
+            let remaining = &body[28..];
+            let expected_bytes = sig_count
+                .checked_mul(96)
+                .ok_or(NetworkError::MalformedPayload)?;
+
+            if remaining.len() != expected_bytes {
+                return Err(NetworkError::MalformedPayload);
+            }
+
+            let mut signatures = Vec::with_capacity(sig_count);
+            let (chunks, _) = remaining.as_chunks::<96>();
+            for chunk in chunks {
+                let mut acct_bytes = [0u8; 32];
+                acct_bytes.copy_from_slice(&chunk[0..32]);
+                let acct = AccountId::new(acct_bytes);
+
+                let mut sig_bytes = [0u8; 64];
+                sig_bytes.copy_from_slice(&chunk[32..96]);
+                let sig = Signature::new(sig_bytes);
+
+                signatures.push((acct, sig));
+            }
+
+            Ok(NetworkMessage::TimeoutCertificate(TimeoutCertificate::new(
+                epoch,
+                round,
+                high_qc_round,
+                signatures,
+            )))
+        }
         unknown => Err(NetworkError::UnknownMessageType(unknown)),
     }
+}
+
+/// Membaca satu pesan biner berbingkai FrameHeader 42-byte dari stream Read.
+pub fn read_message<R: Read>(reader: &mut R) -> Result<NetworkMessage, NetworkError> {
+    let mut header_buf = [0u8; HEADER_SIZE];
+    reader.read_exact(&mut header_buf)?;
+
+    let mut len_bytes = [0u8; 4];
+    len_bytes.copy_from_slice(&header_buf[6..10]);
+    let payload_len = u32::from_le_bytes(len_bytes) as usize;
+
+    let mut payload = vec![0u8; payload_len];
+    reader.read_exact(&mut payload)?;
+
+    let mut full_packet = Vec::with_capacity(
+        HEADER_SIZE
+            .checked_add(payload_len)
+            .ok_or(NetworkError::MalformedPayload)?,
+    );
+    full_packet.extend_from_slice(&header_buf);
+    full_packet.extend_from_slice(&payload);
+
+    decode_message(&full_packet)
+}
+
+/// Menulis satu pesan biner berbingkai FrameHeader 42-byte ke stream Write dan melakukan flush.
+pub fn write_message<W: Write>(writer: &mut W, msg: &NetworkMessage) -> Result<(), NetworkError> {
+    let wire_packet = encode_message(msg)?;
+    writer.write_all(&wire_packet)?;
+    writer.flush()?;
+    Ok(())
 }

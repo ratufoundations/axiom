@@ -14,3 +14,4 @@ Dokumen cetak blueprint dan pelacak tugas rekayasa sistem untuk proyek blockchai
 | TR-08 | Node | Integrasi runtime simpul biner utama (ratu-aurion-node), loop server TCP P2P, pipeline handler, dan graceful shutdown. | TR-01 - TR-07 | Tervalidasi |
 | REFACTOR-REBRAND-01 | Workspace Rebranding | Rebranding menyeluruh workspace dan protokol biner ke Ratu Aurion Protocol (`ratu-aurion-*`, ticker `AUR`, `AurValue`, magic bytes baru). | None | Tervalidasi |
 | E2E-BENCH-01 | E2E Benchmark | End-to-end stress test dan saturasi throughput pipeline in-memory, loopback socket TCP, serta ketahanan injeksi anomali. | TR-05, TR-07, TR-08 | Tervalidasi |
+| NET-CLUSTER-01 | Network / Cluster | 4-Node Testnet Cluster & Consensus Gossip: In-tree Full-Mesh TCP coordinator (`PeerMesh`), gossip wire framing, QC commit, deterministic leader rotation, dan view change failure recovery. | TR-06, TR-07, TR-08 | Tervalidasi |

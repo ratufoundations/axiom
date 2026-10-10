@@ -3,11 +3,12 @@
 //! # Axiom Network
 //!
 //! Modul komunikasi data P2P, serialization framing biner deterministik,
-//! dan manajemen koneksi peer node untuk protokol Axiom.
+//! manajemen koneksi peer node, dan Full-Mesh coordinator untuk protokol Axiom.
 
 pub mod codec;
 pub mod error;
 pub mod framed;
+pub mod mesh;
 pub mod message;
 pub mod peer;
 pub mod rate_limiter;
@@ -15,6 +16,7 @@ pub mod rate_limiter;
 pub use codec::*;
 pub use error::*;
 pub use framed::*;
+pub use mesh::*;
 pub use message::*;
 pub use peer::*;
 pub use rate_limiter::*;
@@ -23,10 +25,13 @@ pub use rate_limiter::*;
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
+    use std::thread;
 
     use ratu_aurion_consensus::certificate::QuorumCertificate;
+    use ratu_aurion_consensus::evidence::VoteRecord;
     use ratu_aurion_consensus::proposal::SegmentProposal;
+    use ratu_aurion_consensus::timeout::{TimeoutCertificate, TimeoutMsg};
     use ratu_aurion_consensus::vote::Vote;
     use ratu_aurion_primitives::crypto::{AccountId, Hash, Signature};
     use ratu_aurion_primitives::framing::HEADER_SIZE;
@@ -115,6 +120,93 @@ mod tests {
         let enc_res = encode_message(&msg_res).expect("Encode tx result");
         let dec_res = decode_message(&enc_res).expect("Decode tx result");
         assert_eq!(msg_res, dec_res);
+
+        // 8. VoteRecord Message
+        let vr = VoteRecord::new(val1, 1, 1, digest, sig1);
+        let msg_vr = NetworkMessage::VoteRecord(vr);
+        let enc_vr = encode_message(&msg_vr).expect("Encode vote record");
+        let dec_vr = decode_message(&enc_vr).expect("Decode vote record");
+        assert_eq!(msg_vr, dec_vr);
+
+        // 9. Timeout Message
+        let t_msg = TimeoutMsg::new(val1, 1, 1, 0, sig1);
+        let msg_t = NetworkMessage::Timeout(t_msg);
+        let enc_t = encode_message(&msg_t).expect("Encode timeout");
+        let dec_t = decode_message(&enc_t).expect("Decode timeout");
+        assert_eq!(msg_t, dec_t);
+
+        // 10. TimeoutCertificate Message
+        let tc = TimeoutCertificate::new(1, 1, 0, vec![(val1, sig1), (val2, sig2)]);
+        let msg_tc = NetworkMessage::TimeoutCertificate(tc);
+        let enc_tc = encode_message(&msg_tc).expect("Encode timeout certificate");
+        let dec_tc = decode_message(&enc_tc).expect("Decode timeout certificate");
+        assert_eq!(msg_tc, dec_tc);
+    }
+
+    #[test]
+    fn test_peer_mesh_lifecycle() {
+        let local_account = AccountId::new([0x01; 32]);
+        let peer_account = AccountId::new([0x02; 32]);
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("Bind ephemeral listener");
+        let listen_addr = listener.local_addr().expect("Local address");
+
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("Accept incoming connection");
+            let incoming = read_message(&mut stream).expect("Read message");
+            match incoming {
+                NetworkMessage::Vote(vote) => {
+                    let reply = NetworkMessage::TxResult {
+                        success: true,
+                        offset: 42,
+                        message: "Vote acknowledged".to_string(),
+                    };
+                    write_message(&mut stream, &reply).expect("Write reply");
+                    vote
+                }
+                _ => panic!("Unexpected message variant received"),
+            }
+        });
+
+        let mut mesh = PeerMesh::new(local_account);
+        assert_eq!(mesh.connected_peer_count(), 0);
+
+        mesh.connect_peer(peer_account, listen_addr)
+            .expect("Connect to peer");
+        assert_eq!(mesh.connected_peer_count(), 1);
+        assert!(mesh.has_peer(&peer_account));
+
+        // Penolakan duplikasi
+        let dup = mesh.connect_peer(peer_account, listen_addr);
+        assert!(matches!(dup, Err(NetworkError::PeerAlreadyExists)));
+
+        let vote = Vote::new(
+            Hash::new([0xbb; 32]),
+            local_account,
+            Signature::new([0x99; 64]),
+        );
+        let vote_msg = NetworkMessage::Vote(vote.clone());
+
+        mesh.send_to(&peer_account, &vote_msg)
+            .expect("Send directed message");
+
+        let reply = mesh
+            .receive_from(&peer_account)
+            .expect("Receive reply from peer");
+        match reply {
+            NetworkMessage::TxResult { success, offset, .. } => {
+                assert!(success);
+                assert_eq!(offset, 42);
+            }
+            _ => panic!("Expected TxResult"),
+        }
+
+        let received_vote = handle.join().expect("Join server thread");
+        assert_eq!(received_vote, vote);
+
+        mesh.disconnect_peer(&peer_account);
+        assert_eq!(mesh.connected_peer_count(), 0);
+        assert!(!mesh.has_peer(&peer_account));
     }
 
     #[test]

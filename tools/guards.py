@@ -34,9 +34,13 @@ def detect_active_task() -> str:
     content = task_file.read_text(encoding="utf-8")
     for line in content.splitlines():
         if "Dalam Pengerjaan" in line or "In Progress" in line or "Review" in line:
-            match = re.search(r"(?:E2E-[A-Z]+-\d+|REFACTOR-REBRAND-\d+|OPT-[A-Z]+-\d+|TR-\d+)", line)
+            match = re.search(r"(?:NET-[A-Z]+-\d+|E2E-[A-Z]+-\d+|REFACTOR-REBRAND-\d+|OPT-[A-Z]+-\d+|TR-\d+)", line)
             if match:
                 return match.group(0)
+    for line in reversed(content.splitlines()):
+        match = re.search(r"(?:NET-[A-Z]+-\d+|E2E-[A-Z]+-\d+|REFACTOR-REBRAND-\d+|OPT-[A-Z]+-\d+|TR-\d+)", line)
+        if match:
+            return match.group(0)
     return "MISC"
 
 def audit_source_code() -> tuple[int, list[str]]:

@@ -1,7 +1,7 @@
 //! Modul server jaringan P2P (NodeServer) dan penanganan pipeline pesan.
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, RwLock};
@@ -11,11 +11,10 @@ use std::time::Duration;
 use ratu_aurion_consensus::certificate::QuorumCertificate;
 use ratu_aurion_consensus::vote::Vote;
 use ratu_aurion_engine::coordinator::EngineCoordinator;
-use ratu_aurion_network::codec::{decode_message, encode_message};
+use ratu_aurion_network::codec::{read_message, write_message};
 use ratu_aurion_network::error::NetworkError;
 use ratu_aurion_network::message::NetworkMessage;
 use ratu_aurion_network::peer::PeerTable;
-use ratu_aurion_primitives::framing::HEADER_SIZE;
 
 use crate::config::NodeConfig;
 
@@ -23,6 +22,7 @@ use crate::config::NodeConfig;
 pub const MAX_SYNC_CHUNK_SIZE: usize = 65_536;
 
 /// Server jaringan simpul utama yang mengelola loop koneksi TCP dan orkestrasi pesan.
+#[derive(Clone)]
 pub struct NodeServer {
     /// Konfigurasi simpul aktif.
     pub config: NodeConfig,
@@ -95,12 +95,13 @@ impl NodeServer {
             // 2. Menerima koneksi baru non-blocking
             match listener.accept() {
                 Ok((mut stream, peer_addr)) => {
-                    let _ = stream.set_nonblocking(false);
-                    let _ = stream.set_read_timeout(Some(Duration::from_millis(2000)));
-                    let _ = stream.set_write_timeout(Some(Duration::from_millis(2000)));
-                    if let Err(e) = self.handle_incoming_stream(&mut stream, peer_addr) {
-                        eprintln!("[SERVER ERROR] handle_incoming_stream failed: {e:?}");
-                    }
+                    let server = self.clone();
+                    thread::spawn(move || {
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(Duration::from_millis(2000)));
+                        let _ = stream.set_write_timeout(Some(Duration::from_millis(2000)));
+                        while let Ok(()) = server.handle_incoming_stream(&mut stream, peer_addr) {}
+                    });
                 }
                 Err(ref e)
                     if e.kind() == std::io::ErrorKind::WouldBlock
@@ -124,46 +125,22 @@ impl NodeServer {
         self.run_listener(listener, shutdown_signal)
     }
 
-    /// Menangani satu koneksi masuk TCP, membaca frame paket biner, dan memproses payload.
-    fn handle_incoming_stream(
+    /// Menangani satu frame pesan masuk TCP, memproses payload, dan memberikan balasan.
+    pub fn handle_incoming_stream(
         &self,
         stream: &mut TcpStream,
         _peer_addr: SocketAddr,
     ) -> Result<(), NetworkError> {
-        // 1. Baca 42 byte FrameHeader
-        let mut header_buf = [0u8; HEADER_SIZE];
-        stream.read_exact(&mut header_buf)?;
+        let incoming_msg = read_message(stream)?;
 
-        // Ekstraksi panjang payload dari bytes [6..10]
-        let mut len_bytes = [0u8; 4];
-        len_bytes.copy_from_slice(&header_buf[6..10]);
-        let payload_len = u32::from_le_bytes(len_bytes) as usize;
-
-        // 2. Baca isi payload secara lengkap
-        let mut payload = vec![0u8; payload_len];
-        stream.read_exact(&mut payload)?;
-
-        // 3. Gabungkan header dan payload untuk verifikasi checksum dan deserialisasi
-        let mut full_packet = Vec::with_capacity(
-            HEADER_SIZE
-                .checked_add(payload_len)
-                .ok_or(NetworkError::MalformedPayload)?,
-        );
-        full_packet.extend_from_slice(&header_buf);
-        full_packet.extend_from_slice(&payload);
-
-        let incoming_msg = decode_message(&full_packet)?;
-
-        // 4. Proses pesan sesuai spesifikasi pipeline handler
+        // Proses pesan sesuai spesifikasi pipeline handler
         match incoming_msg {
             NetworkMessage::Proposal(proposal) => {
                 // Verifikasi proposal dan tanda tangani balasan Vote
                 let validator_account = self.config.validator_account();
                 let vote = Vote::sign(&proposal, validator_account, &self.config.validator_key);
                 let reply = NetworkMessage::Vote(vote);
-                let reply_packet = encode_message(&reply)?;
-                stream.write_all(&reply_packet)?;
-                stream.flush()?;
+                write_message(stream, &reply)?;
             }
             NetworkMessage::Vote(vote) => {
                 // Kumpulkan suara ke dalam QuorumCertificate aktif jika ada
@@ -171,6 +148,17 @@ impl NodeServer {
                     if let Some(ref mut cert) = *cert_guard {
                         if cert.proposal.digest() == vote.proposal_digest {
                             cert.signatures.insert(vote.validator, vote.signature);
+                        }
+                    }
+                }
+            }
+            NetworkMessage::VoteRecord(vote_record) => {
+                // Kumpulkan suara VoteRecord ke dalam QuorumCertificate aktif jika ada
+                if let Ok(mut cert_guard) = self.active_certificate.write() {
+                    if let Some(ref mut cert) = *cert_guard {
+                        if cert.proposal.digest() == vote_record.block_hash {
+                            cert.signatures
+                                .insert(vote_record.validator, vote_record.signature);
                         }
                     }
                 }
@@ -204,9 +192,7 @@ impl NodeServer {
                     offset: from_offset,
                     data: chunk_data,
                 };
-                let reply_packet = encode_message(&reply)?;
-                stream.write_all(&reply_packet)?;
-                stream.flush()?;
+                write_message(stream, &reply)?;
             }
             NetworkMessage::Certificate(qc) => {
                 // Catat sertifikat kuorum finalitas baru
@@ -217,22 +203,31 @@ impl NodeServer {
             NetworkMessage::SyncChunk { .. } => {
                 // Respons potongan data diterima
             }
+            NetworkMessage::Timeout(_) => {
+                // Pesan timeout diterima
+            }
+            NetworkMessage::TimeoutCertificate(_) => {
+                // Sertifikat timeout diterima
+            }
             NetworkMessage::TxSubmit(record) => {
                 let res = match self.engine.write() {
                     Ok(mut eng) => {
-                        if eng.query_balance(&record.sender) == ratu_aurion_primitives::value::AurValue::ZERO
+                        if eng.query_balance(&record.sender)
+                            == ratu_aurion_primitives::value::AurValue::ZERO
                             && record.sequence_number == 1
                         {
                             eng.seed_account(
                                 record.sender,
-                                ratu_aurion_primitives::value::AurValue::from_atomic(10_000_000_000_000),
+                                ratu_aurion_primitives::value::AurValue::from_atomic(
+                                    10_000_000_000_000,
+                                ),
                             );
                         }
                         eng.submit_transaction(&record)
                     }
-                    Err(e) => Err(ratu_aurion_engine::error::EngineError::IoError(std::io::Error::other(
-                        format!("Engine lock error: {e}"),
-                    ))),
+                    Err(e) => Err(ratu_aurion_engine::error::EngineError::IoError(
+                        std::io::Error::other(format!("Engine lock error: {e}")),
+                    )),
                 };
 
                 if let Ok(offset) = res {
@@ -256,9 +251,7 @@ impl NodeServer {
                         message: format!("{e}"),
                     },
                 };
-                let reply_packet = encode_message(&reply)?;
-                stream.write_all(&reply_packet)?;
-                stream.flush()?;
+                write_message(stream, &reply)?;
             }
             NetworkMessage::TxResult { .. } => {
                 // Konfirmasi hasil transaksi diterima
