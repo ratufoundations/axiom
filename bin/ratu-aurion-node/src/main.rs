@@ -27,13 +27,35 @@ fn main() {
     println!("[ratu-aurion-node] Memulai bootstrap simpul Axiom...");
 
     // 1. Parsing konfigurasi CLI
-    let config = match NodeConfig::parse_args() {
+    let mut config = match NodeConfig::parse_args() {
         Ok(cfg) => cfg,
         Err(err) => {
             eprintln!("[ratu-aurion-node ERROR] {err}");
             std::process::exit(1);
         }
     };
+
+    // Jika --keystore disediakan, dekripsi kunci validator langsung dari berkas keystore
+    if let Some(ref keystore_path) = config.keystore_path {
+        let pass = config.keystore_pass.as_deref().unwrap_or("");
+        match ratu_aurion_primitives::keystore::load_keystore_file(keystore_path, pass) {
+            Ok((key, account)) => {
+                println!(
+                    "[ratu-aurion-node] Kunci validator berhasil didekripsi dari keystore {:?} (AccountId: 0x{})",
+                    keystore_path,
+                    crate::rpc::hex_encode(account.as_bytes())
+                );
+                config.validator_key = key;
+            }
+            Err(e) => {
+                eprintln!(
+                    "[ratu-aurion-node ERROR] Gagal mendekripsi berkas keystore {:?}: {e}",
+                    keystore_path
+                );
+                std::process::exit(1);
+            }
+        }
+    }
 
     println!(
         "[ratu-aurion-node] Konfigurasi dimuat: listen={}, epoch={}, data_dir={:?}, archive_dir={:?}",

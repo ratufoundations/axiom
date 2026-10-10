@@ -23,6 +23,10 @@ pub struct NodeConfig {
     pub ipc_socket: Option<PathBuf>,
     /// Alamat socket TCP lokal untuk gateway JSON-RPC & WebSocket (opsional).
     pub rpc_addr: Option<SocketAddr>,
+    /// Path berkas keystore validator terenkripsi (opsional).
+    pub keystore_path: Option<PathBuf>,
+    /// Kata sandi untuk mendekripsi berkas keystore validator (opsional).
+    pub keystore_pass: Option<String>,
 }
 
 impl NodeConfig {
@@ -42,6 +46,8 @@ impl NodeConfig {
             validator_key,
             ipc_socket: None,
             rpc_addr: None,
+            keystore_path: None,
+            keystore_pass: None,
         }
     }
 
@@ -66,6 +72,8 @@ impl NodeConfig {
             validator_key,
             ipc_socket: None,
             rpc_addr: None,
+            keystore_path: None,
+            keystore_pass: None,
         }
     }
 
@@ -87,6 +95,8 @@ impl NodeConfig {
         let mut rpc_addr: Option<SocketAddr> = Some(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9545),
         );
+        let mut keystore_path: Option<PathBuf> = None;
+        let mut keystore_pass: Option<String> = std::env::var("AUR_KEYSTORE_PASSWORD").ok();
 
         let args_vec: Vec<String> = args.into_iter().collect();
         let mut i = 0;
@@ -151,8 +161,22 @@ impl NodeConfig {
                     }
                     ipc_socket = Some(PathBuf::from(&args_vec[i]));
                 }
+                "--keystore" => {
+                    i = i.checked_add(1).ok_or("Arg index overflow")?;
+                    if i >= args_vec.len() {
+                        return Err("Missing argument for --keystore".to_string());
+                    }
+                    keystore_path = Some(PathBuf::from(&args_vec[i]));
+                }
+                "--keystore-pass" => {
+                    i = i.checked_add(1).ok_or("Arg index overflow")?;
+                    if i >= args_vec.len() {
+                        return Err("Missing argument for --keystore-pass".to_string());
+                    }
+                    keystore_pass = Some(args_vec[i].clone());
+                }
                 "--help" | "-h" => {
-                    return Err("Usage: ratu-aurion-node [--data-dir PATH] [--archive-dir PATH] [--listen IP:PORT] [--rpc-addr IP:PORT] [--epoch NUM] [--seed-byte U8] [--ipc-socket PATH]".to_string());
+                    return Err("Usage: ratu-aurion-node [--data-dir PATH] [--archive-dir PATH] [--listen IP:PORT] [--rpc-addr IP:PORT] [--epoch NUM] [--seed-byte U8] [--ipc-socket PATH] [--keystore PATH] [--keystore-pass PASS]".to_string());
                 }
                 unknown => {
                     return Err(format!("Unknown argument: {unknown}"));
@@ -173,6 +197,8 @@ impl NodeConfig {
             validator_key,
             ipc_socket,
             rpc_addr,
+            keystore_path,
+            keystore_pass,
         })
     }
 

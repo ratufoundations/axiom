@@ -40,6 +40,9 @@ fn print_usage() {
     println!("Penggunaan:");
     println!("  ratu-aurion-cli keygen --out <path>");
     println!("  ratu-aurion-cli inspect --key <path>");
+    println!("  ratu-aurion-cli keystore generate --out <path> [--passphrase <pass>]");
+    println!("  ratu-aurion-cli keystore inspect --file <path> [--passphrase <pass>]");
+    println!("  ratu-aurion-cli keystore export --file <path> [--passphrase <pass>]");
     println!("  ratu-aurion-cli transfer --key <path> --to <hex> --amount <axm> --epoch <u64> --seq <u64> --node <ip:port>");
     println!("  ratu-aurion-cli status --ipc <socket_path>");
 }
@@ -143,8 +146,110 @@ fn run_cli(args: &[String]) -> Result<(), CliError> {
                 .map_err(|e| CliError::NodeRejectedTransaction(e.to_string()))?;
             Ok(())
         }
+        "keystore" => {
+            if args.len() < 2 {
+                return Err(CliError::MissingArgument("subcommand: generate | inspect | export"));
+            }
+            let sub = args[1].as_str();
+            let sub_args = &args[1..];
+            match sub {
+                "generate" => {
+                    let out_path =
+                        find_arg(sub_args, "--out").ok_or(CliError::MissingArgument("--out"))?;
+                    let pass_opt = find_arg(sub_args, "--passphrase").map(String::from);
+                    let passphrase = match pass_opt {
+                        Some(p) => p,
+                        None => prompt_passphrase("Masukkan kata sandi keystore: ")?,
+                    };
+
+                    let nanos = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(|e| CliError::NodeRejectedTransaction(e.to_string()))?
+                        .as_nanos();
+                    let pid = std::process::id();
+                    let mut seed = [0u8; 32];
+                    seed[0..16].copy_from_slice(&nanos.to_le_bytes());
+                    seed[16..20].copy_from_slice(&pid.to_le_bytes());
+                    seed[20] = 0xef;
+
+                    let wallet = Wallet::generate_from_entropy(seed);
+                    let account_id = wallet.save_to_keystore(Path::new(out_path), &passphrase)?;
+
+                    println!("[ratu-aurion-cli] Keystore berhasil dibuat dan disimpan.");
+                    println!("Account ID: 0x{}", bytes_to_hex(account_id.as_bytes()));
+                    println!("Alamat Akun (AccountId): 0x{}", bytes_to_hex(account_id.as_bytes()));
+                    println!("Berkas Keystore: {out_path}");
+                    Ok(())
+                }
+                "inspect" => {
+                    let file_path =
+                        find_arg(sub_args, "--file").ok_or(CliError::MissingArgument("--file"))?;
+                    let pass_opt = find_arg(sub_args, "--passphrase").map(String::from);
+                    let passphrase = match pass_opt {
+                        Some(p) => p,
+                        None => prompt_passphrase("Masukkan kata sandi keystore: ")?,
+                    };
+
+                    let path = Path::new(file_path);
+                    let file_data = std::fs::read(path).map_err(CliError::IoError)?;
+                    if file_data.len() != ratu_aurion_primitives::keystore::KEYSTORE_FILE_SIZE {
+                        return Err(CliError::from(
+                            ratu_aurion_primitives::keystore::KeystoreError::CorruptedFile {
+                                size: file_data.len(),
+                            },
+                        ));
+                    }
+                    let iterations = u32::from_le_bytes([
+                        file_data[12],
+                        file_data[13],
+                        file_data[14],
+                        file_data[15],
+                    ]);
+
+                    let (signing_key, account_id) =
+                        ratu_aurion_primitives::keystore::load_keystore_file(path, &passphrase)?;
+                    let pubkey = signing_key.verifying_key().to_bytes();
+
+                    println!("[ratu-aurion-cli] Keystore terverifikasi & terdekripsi.");
+                    println!("Account ID: 0x{}", bytes_to_hex(account_id.as_bytes()));
+                    println!("Public Key: 0x{}", bytes_to_hex(&pubkey));
+                    println!("KDF Iterations: {iterations}");
+                    Ok(())
+                }
+                "export" => {
+                    let file_path =
+                        find_arg(sub_args, "--file").ok_or(CliError::MissingArgument("--file"))?;
+                    let pass_opt = find_arg(sub_args, "--passphrase").map(String::from);
+                    let passphrase = match pass_opt {
+                        Some(p) => p,
+                        None => prompt_passphrase("Masukkan kata sandi keystore: ")?,
+                    };
+                    let (signing_key, account_id) =
+                        ratu_aurion_primitives::keystore::load_keystore_file(
+                            Path::new(file_path),
+                            &passphrase,
+                        )?;
+                    let wallet = Wallet { signing_key };
+                    println!("[ratu-aurion-cli] Kunci privat diekspor dari keystore.");
+                    println!("Account ID: 0x{}", bytes_to_hex(account_id.as_bytes()));
+                    println!("Secret Key Hex: 0x{}", wallet.to_secret_hex());
+                    Ok(())
+                }
+                _ => Err(CliError::UnknownCommand(format!("keystore {sub}"))),
+            }
+        }
         unknown => Err(CliError::UnknownCommand(unknown.to_string())),
     }
+}
+
+fn prompt_passphrase(prompt: &str) -> Result<String, CliError> {
+    use std::io::{self, Write};
+    print!("{prompt}");
+    io::stdout().flush().map_err(CliError::IoError)?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).map_err(CliError::IoError)?;
+    let trimmed = input.trim_end_matches(['\r', '\n']);
+    Ok(trimmed.to_string())
 }
 
 fn find_arg<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {

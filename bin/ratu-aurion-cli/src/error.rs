@@ -24,6 +24,8 @@ pub enum CliError {
     MissingArgument(&'static str),
     /// Sub-perintah CLI tidak dikenali.
     UnknownCommand(String),
+    /// Galat pada enkripsi atau dekripsi keystore.
+    KeystoreError(ratu_aurion_primitives::keystore::KeystoreError),
 }
 
 impl fmt::Display for CliError {
@@ -42,6 +44,7 @@ impl fmt::Display for CliError {
             }
             Self::MissingArgument(arg) => write!(f, "Missing required argument: {arg}"),
             Self::UnknownCommand(cmd) => write!(f, "Unknown CLI command: '{cmd}'"),
+            Self::KeystoreError(e) => write!(f, "Keystore Error: {e}"),
         }
     }
 }
@@ -51,6 +54,7 @@ impl std::error::Error for CliError {
         match self {
             Self::IoError(e) => Some(e),
             Self::NetworkError(e) => Some(e),
+            Self::KeystoreError(e) => Some(e),
             _ => None,
         }
     }
@@ -67,5 +71,12 @@ impl From<ratu_aurion_network::error::NetworkError> for CliError {
     #[inline]
     fn from(err: ratu_aurion_network::error::NetworkError) -> Self {
         Self::NetworkError(err)
+    }
+}
+
+impl From<ratu_aurion_primitives::keystore::KeystoreError> for CliError {
+    #[inline]
+    fn from(err: ratu_aurion_primitives::keystore::KeystoreError) -> Self {
+        Self::KeystoreError(err)
     }
 }

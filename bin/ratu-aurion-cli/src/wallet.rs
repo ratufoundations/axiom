@@ -62,6 +62,20 @@ impl Wallet {
         Self::from_secret_hex(content.trim())
     }
 
+    /// Menyimpan dompet ke format berkas keystore terenkripsi biner 128-byte.
+    pub fn save_to_keystore(&self, path: &Path, passphrase: &str) -> Result<AccountId, CliError> {
+        let account =
+            ratu_aurion_primitives::keystore::save_keystore_file(path, &self.signing_key, passphrase)?;
+        Ok(account)
+    }
+
+    /// Memuat dompet dari berkas keystore terenkripsi biner 128-byte.
+    pub fn load_from_keystore(path: &Path, passphrase: &str) -> Result<Self, CliError> {
+        let (signing_key, _) =
+            ratu_aurion_primitives::keystore::load_keystore_file(path, passphrase)?;
+        Ok(Self { signing_key })
+    }
+
     /// Menyusun dan menandatangani 97-byte payload mutasi transaksi.
     ///
     /// Komposisi:

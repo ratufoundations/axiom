@@ -2,6 +2,54 @@
 
 ## Completed Tickets
 
+### Ticket SEC-KEYSTORE-01: Encrypted Keystore & Validator Key Management
+- **Target Subsystem**: `crates/ratu-aurion-primitives` (`src/keystore.rs`, `src/lib.rs`, `tests/test_keystore.rs`), `bin/ratu-aurion-cli` (`src/main.rs`, `src/wallet.rs`, `src/error.rs`), `bin/ratu-aurion-node` (`src/config.rs`, `src/main.rs`)
+- **Status**: Validated & Merged
+- **Specification**: In-tree encrypted validator keystore subsystem implementing a fixed 128-byte binary layout (`KEYSTORE_FILE_SIZE = 128`), 64-byte header (`KEYSTORE_HEADER_SIZE = 64`) with magic `*b"RAURKEY\x01"`, iterative PBKDF-BLAKE3 key derivation (100,000 iterations), in-tree pure-integer ChaCha20 encryption (RFC 8439 Section 2.4.2 verified against official test vectors), BLAKE3 Keyed MAC fail-fast tamper detection, CLI subcommands (`keystore generate`, `inspect`, `export`), and node bootstrap integration (`--keystore <PATH>`, `--keystore-pass <PASS>`, `AUR_KEYSTORE_PASSWORD`).
+
+#### Architectural & Technical Invariants
+1. **Fixed 128-Byte Binary Layout (`KEYSTORE_FILE_SIZE = 128`)**:
+   - `0..8`: Magic bytes `*b"RAURKEY\x01"`. Files with mismatched magic bytes fail fast with `KeystoreError::InvalidMagic`.
+   - `8..10`: Version (`1u16` Little-Endian, `KEYSTORE_VERSION = 1`).
+   - `10..12`: KDF Identifier (`1u16` Little-Endian, `KEYSTORE_KDF_PBKDF_BLAKE3 = 1`).
+   - `12..16`: KDF Iterations (`100_000u32` Little-Endian, `DEFAULT_KDF_ITERATIONS`).
+   - `16..32`: Salt (`[u8; 16]`).
+   - `32..44`: Nonce (`[u8; 12]`).
+   - `44..64`: Reserved bytes (`[0u8; 20]`, zero-filled).
+   - `64..96`: Ciphertext (`[u8; 32]`, ChaCha20 encrypted 32-byte secret seed of Ed25519 `SigningKey`).
+   - `96..128`: Keyed MAC (`[u8; 32]`, BLAKE3 keyed hash computed over bytes `0..96`).
+   - Files with size < 128 or > 128 bytes reject immediately with `KeystoreError::CorruptedFile { size }`.
+2. **Iterative PBKDF-BLAKE3 Key Derivation**:
+   - Iteration 0: `hasher.update(passphrase); hasher.update(salt); digest = hasher.finalize()`.
+   - Iterations 1..100,000: `digest = blake3::hash(digest)`.
+   - Domain-separated key expansion:
+     - `enc_key = blake3::derive_key("ratu-aurion-keystore-enc-key-v1", &digest)` (32 bytes).
+     - `mac_key = blake3::derive_key("ratu-aurion-keystore-mac-key-v1", &digest)` (32 bytes).
+3. **In-Tree ChaCha20 (RFC 8439)**:
+   - Pure-integer 32-bit arithmetic with `wrapping_add`, XOR, and bitwise rotation `rotate_left` (16, 12, 8, 7).
+   - 20 rounds (10 column rounds, 10 diagonal rounds) using initial state constants `0x61707865`, `0x3320646e`, `0x79622d32`, `0x6b206574`.
+   - Initial counter = 1; verified against official RFC 8439 Section 2.4.2 test vector ("Ladies and Gentlemen of the class of '99...").
+4. **Fail-Fast BLAKE3 Keyed MAC Verification**:
+   - Constant-time comparison `diff |= a[i] ^ b[i]` over 32 bytes to eliminate timing side-channel leaks.
+   - Any incorrect passphrase or tampered bit in header (offset 20) or ciphertext (offset 70) fails fast with `KeystoreError::MacMismatch` prior to seed decryption.
+5. **Zero-Dependency & Absolute Safety Compliance**:
+   - Zero external crypto crates (`ring`, `aes`, `chacha20poly1305`, `argon2` strictly forbidden).
+   - Strictly `#![forbid(unsafe_code)]` and zero float types across all modules.
+   - Zero `unwrap()` and zero `expect()` in library paths; structured `KeystoreError` variants.
+
+#### Keystore Integration Test Verification Metrics
+- **Test Suite**: `crates/ratu-aurion-primitives/tests/test_keystore.rs`
+- **Execution Latency**: 1.15s (6/6 integration tests passing)
+- **Verified Test Scenarios**:
+  1. `test_keystore_binary_layout_size`: Verified `KEYSTORE_FILE_SIZE == 128` and `KEYSTORE_HEADER_SIZE == 64`.
+  2. `test_keystore_encryption_and_decryption_roundtrip`: End-to-end file persistence, exact 128B file length check, passphrase decryption, and `AccountId` verification.
+  3. `test_keystore_fail_fast_wrong_passphrase`: Wrong password attempt returns `Err(KeystoreError::MacMismatch)` without key leakage.
+  4. `test_keystore_fail_fast_bit_tampering`: 1-bit ciphertext tampering (offset 70) and 1-bit salt tampering (offset 20) fail with `MacMismatch`; magic tampering (offset 0) fails with `InvalidMagic`.
+  5. `test_keystore_sub_128_bytes_truncation_rejection`: 50-byte and 127-byte truncated files fail with `KeystoreError::CorruptedFile`.
+  6. `test_in_tree_chacha20_rfc8439_test_vector`: Official RFC 8439 Section 2.4.2 114-byte encryption and decryption test vectors passing with bit-exact match.
+
+---
+
 ### Ticket GATEWAY-RPC-01: JSON-RPC & WebSocket Gateway Interface
 - **Target Subsystem**: `bin/ratu-aurion-node` (`src/rpc.rs`, `src/ws.rs`, `src/server.rs`, `src/lib.rs`, `tests/test_rpc_gateway.rs`)
 - **Status**: Validated & Merged

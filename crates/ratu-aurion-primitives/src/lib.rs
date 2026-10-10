@@ -7,11 +7,13 @@
 
 pub mod crypto;
 pub mod framing;
+pub mod keystore;
 pub mod record;
 pub mod value;
 
 pub use crypto::*;
 pub use framing::*;
+pub use keystore::*;
 pub use record::*;
 pub use value::*;
 
