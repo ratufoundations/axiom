@@ -21,3 +21,10 @@ float_cmp = "deny"
 float_cmp_const = "deny"
 suboptimal_flops = "deny"
 imprecise_flops = "deny"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

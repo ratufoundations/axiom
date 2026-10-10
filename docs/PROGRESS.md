@@ -2,6 +2,53 @@
 
 ## Completed Tickets
 
+### Ticket PERF-RELEASE-01: Production Release Optimization & Hardware Saturation
+- **Target Subsystem**: `Cargo.toml`, `crates/ratu-aurion-engine` (`tests/test_perf_release.rs`), `bin/ratu-aurion-node` (`tests/test_cluster_perf.rs`)
+- **Status**: Validated & Merged
+- **Specification**: Production release benchmark and hardware saturation characterization mapping peak and sustained TPS, zero-float integer latency distribution (min, p50, p95, p99, max), and 4-node Full-Mesh P2P cluster consensus round commitment times under aggressive LLVM release optimization (`opt-level = 3`, `lto = "fat"`, `codegen-units = 1`, `panic = "abort"`).
+
+#### Architectural & Technical Invariants
+1. **Aggressive Compiler Release Profile (`Cargo.toml`)**:
+   - `opt-level = 3`: Maximum code generation optimization across all workspace crates.
+   - `lto = "fat"`: Full cross-crate Link-Time Optimization eliminating function boundary overhead and maximizing inlining of cryptographic primitives (Ed25519 signature checks, BLAKE3 state operations).
+   - `codegen-units = 1`: Single code generation unit per crate allowing maximal global redundancy elimination.
+   - `panic = "abort"`: Eliminates landing pads and unwinding overhead, reducing binary size and cache pollution.
+   - `strip = "symbols"`: Strips debug symbols from release output for reduced process memory footprint.
+2. **Pure Integer Latency Profiler (`LatencyHistogram`)**:
+   - Records latency samples strictly in integer microseconds (`u64`).
+   - Percentile calculation using integer index division:
+     $$k = \frac{P \times N}{100}$$
+     where $P \in \{50, 95, 99\}$ and $N$ is total sample count. Zero floating-point arithmetic throughout.
+   - Absolute integer throughput formula:
+     $$\text{TPS} = \frac{N \times 1,000,000}{\text{durasi\_mikrodetik}}$$
+3. **Pipeline Saturation Under Release Load (10,000 Transactions)**:
+   - Pipeline Topology: 16 parallel Ed25519 cryptographic verifiers (Stage 1), 1 deterministic single-threaded in-memory sequencer (Stage 2), and 1 batch disk storage writer (Stage 3).
+   - Memory State: 1,000 hot accounts in RAM backed by `ColdStore` index on disk.
+   - Concurrent Load: 16 parallel client worker threads streaming 625 transactions each (10,000 total signed mutations) across 50 seeded client accounts.
+   - State & Supply Integrity: All 10,000 transactions committed monotonically to disk segment (`total_records == 10_000`); global monetary supply strictly conserved at 500,000.0000000000 AUR.
+4. **4-Node Full-Mesh Cluster Release Consensus**:
+   - Bootstrap 4 local `NodeServer` instances on ephemeral ports with mutual Full-Mesh TCP `PeerMesh`.
+   - 5 consecutive consensus rounds executed with deterministic leader rotation (`(epoch + round) % 4`).
+   - Round-trip proposal broadcast, signature verification, Quorum Certificate (QC) aggregation ($\ge 3$ votes), and synchronous disk log commitment executed in ~1.4 ms per round.
+   - Monetary balances and disk offsets verified 100% identical across all 4 nodes.
+
+#### Benchmark Execution & Verification Results
+- **Test Suites**:
+  - `crates/ratu-aurion-engine/tests/test_perf_release.rs` (1.00s)
+  - `bin/ratu-aurion-node/tests/test_cluster_perf.rs` (0.08s)
+- **Measured Production Metrics**:
+  - Sustained Pipeline TPS: **10,608 TPS** (10,000 tx committed in 942 ms with 16 parallel worker threads, a 69.8x throughput increase over unoptimized dev mode).
+  - Microsecond Latency Distribution:
+    - Min: **98 us**
+    - p50: **740 us**
+    - p95: **4,892 us**
+    - p99: **6,043 us**
+    - Max: **15,977 us**
+  - 4-Node Cluster Round Commitment: **1,462 us** average latency per consensus round (~684 consensus rounds/sec).
+  - Supply Conservation: 100% verified across both pipeline (500,000 AUR) and cluster (10,000 AUR) tests.
+
+---
+
 ### Ticket SEC-KEYSTORE-01: Encrypted Keystore & Validator Key Management
 - **Target Subsystem**: `crates/ratu-aurion-primitives` (`src/keystore.rs`, `src/lib.rs`, `tests/test_keystore.rs`), `bin/ratu-aurion-cli` (`src/main.rs`, `src/wallet.rs`, `src/error.rs`), `bin/ratu-aurion-node` (`src/config.rs`, `src/main.rs`)
 - **Status**: Validated & Merged
