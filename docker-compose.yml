@@ -1,0 +1,36 @@
+services:
+  node:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    container_name: aurion-node
+    restart: unless-stopped
+    ports:
+      - "9545:9545"
+      - "9001:9001"
+    volumes:
+      - ${AURION_HDD_DATA_DIR:-/mnt/d/aurion-data/chain}:/data/chain
+      - ${AURION_HDD_ARCHIVE_DIR:-/mnt/d/aurion-data/archive}:/data/archive
+
+  explorer:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: aurion-explorer
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_RPC_URL=https://rpc.ratuaurion.store
+      - NEXT_PUBLIC_WS_URL=wss://rpc.ratuaurion.store/ws
+    depends_on:
+      - node
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: aurion-tunnel
+    restart: unless-stopped
+    command: tunnel run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - node
+      - explorer

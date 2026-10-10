@@ -2,6 +2,34 @@
 
 ## Completed Tickets
 
+### Ticket OPS-DOCKER-TUNNEL-01: Workspace Cleanup, Docker Compose & HDD Storage Setup
+- **Target Subsystem**: `Dockerfile.node`, `web/Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.env.example`, `tools/guards.py`, `task-register.md`
+- **Status**: Validated & Merged
+- **Specification**: Production Docker containerization and orchestration architecture establishing multi-stage Dockerfiles for both the core Rust consensus node (`ratu-aurion-node`) and the Next.js 15 frontend explorer (`web/`), physical HDD bind mounts via WSL (`/mnt/d/aurion-data/chain` and `/mnt/d/aurion-data/archive`), build context isolation with `.dockerignore`, Cloudflare Zero Trust tunnel orchestration (`cloudflared`), and workspace hygiene purging legacy zip files and stale extraction caches.
+
+#### Architectural & Technical Invariants
+1. **Multi-Stage Node Containerization (`Dockerfile.node`)**:
+   - Stage 1 (Builder): Built from `rust:1.85-bookworm` compiling the release binary `ratu-aurion-node` (`cargo build --release --bin ratu-aurion-node`).
+   - Stage 2 (Runner): Minimal `debian:bookworm-slim` containing `ca-certificates` and the compiled binary in `/usr/local/bin/ratu-aurion-node`.
+   - Exposed ports: `9545` (JSON-RPC 2.0 / WebSocket) and `9001` (TCP P2P mesh listener).
+   - Configured entrypoint and defaults pointing to `/data/chain` and `/data/archive`.
+2. **Multi-Stage Standalone Web Containerization (`web/Dockerfile`)**:
+   - Stage 1 (Builder): Built on `node:22-alpine` executing `npm ci` and `npm run build` using Next.js 15 standalone optimization.
+   - Stage 2 (Runner): Ultra-lightweight `node:22-alpine` running non-root `nextjs:nodejs` user with `.next/standalone`, `.next/static`, and `public/`.
+   - Exposed port: `3000`.
+3. **Container Orchestration & Storage Topology (`docker-compose.yml`)**:
+   - Service `node`: Mounts physical secondary HDD host paths `${AURION_HDD_DATA_DIR:-/mnt/d/aurion-data/chain}` and `${AURION_HDD_ARCHIVE_DIR:-/mnt/d/aurion-data/archive}` with restart policy `unless-stopped`.
+   - Service `explorer`: Connects to public gateway domain via `NEXT_PUBLIC_RPC_URL` (`https://rpc.ratuaurion.store`) and `NEXT_PUBLIC_WS_URL` (`wss://rpc.ratuaurion.store/ws`), depending on `node`.
+   - Service `tunnel`: Runs `cloudflare/cloudflared:latest` using Zero Trust token `${CLOUDFLARE_TUNNEL_TOKEN}` to publish secure endpoints to the edge without opening public router ports.
+4. **Physical HDD Mount & Hygiene**:
+   - WSL mount path: `/mnt/d/aurion-data/chain` and `/mnt/d/aurion-data/archive` created with recursive `777` permissions for seamless container write access.
+   - Removed legacy temporary files and extracted directories (`aurion-explore.zip`, `temp-aurion-explore`).
+5. **Quality & Compose Validation**:
+   - Container configuration validated bit-for-bit via `docker compose config`.
+   - Full Rust workspace verification and static guard checks passed with 0 errors.
+
+---
+
 ### Ticket FE-EXPLORER-01: Monorepo Integration of Aurion Explorer (Next.js + shadcn/ui)
 - **Target Subsystem**: `web/` (`app/`, `components/`, `components/ui/`, `hooks/`, `data/`, `types/`, `package.json`, `tsconfig.json`, `next.config.ts`), `tools/guards.py`, `.gitignore`, `task-register.md`
 - **Status**: Validated & Merged

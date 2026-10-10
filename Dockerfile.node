@@ -1,0 +1,27 @@
+# Stage 1: Builder
+FROM rust:1.85-bookworm AS builder
+WORKDIR /usr/src/app
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY bin ./bin
+
+RUN cargo build --release --bin ratu-aurion-node
+
+# Stage 2: Runner
+FROM debian:bookworm-slim AS runner
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /data/chain /data/archive
+
+COPY --from=builder /usr/src/app/target/release/ratu-aurion-node /usr/local/bin/ratu-aurion-node
+
+EXPOSE 9001 9545
+
+VOLUME ["/data/chain", "/data/archive"]
+
+ENTRYPOINT ["ratu-aurion-node"]
+CMD ["--data-dir", "/data/chain", "--archive-dir", "/data/archive", "--listen", "0.0.0.0:9001", "--rpc-addr", "0.0.0.0:9545"]
