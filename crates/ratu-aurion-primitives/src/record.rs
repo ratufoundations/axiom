@@ -12,6 +12,33 @@ pub const RECORD_KIND_TRANSFER: u8 = 1;
 /// Jenis record: Notifikasi status sistem / operasi jaringan.
 pub const RECORD_KIND_SYSTEM_NOTIF: u8 = 2;
 
+/// Jenis record: Pemusnahan biaya transaksi (Fee Burn).
+pub const RECORD_KIND_FEE_BURN: u8 = 0x02;
+
+/// Jenis record: Emisi reward blok ke validator leader (Block Reward).
+pub const RECORD_KIND_BLOCK_REWARD: u8 = 0x03;
+
+/// Penyebut basis poin deterministik (10_000 basis points = 100%).
+pub const BPS_DENOMINATOR: u128 = 10_000;
+
+/// Rasio pembakaran biaya transaksi baku (70% = 7_000 BPS).
+pub const DEFAULT_BURN_RATIO_BPS: u128 = 7_000;
+
+/// Rasio tip prioritas transaksi untuk leader (30% = 3_000 BPS).
+pub const DEFAULT_TIP_RATIO_BPS: u128 = 3_000;
+
+/// Target inflasi tahunan moneter (5% = 500 BPS).
+pub const ANNUAL_INFLATION_BPS: u128 = 500;
+
+/// Estimasi jumlah blok per tahun (1 detik per blok = 31.536.000 blok).
+pub const BLOCKS_PER_YEAR: u128 = 31_536_000;
+
+/// Biaya dasar per transaksi dalam unit atomik (0.001 AUR = 10_000_000 atomik).
+pub const BASE_TX_FEE_ATOMIC: u128 = 10_000_000; // 0.001 AUR
+
+/// Biaya dasar per transaksi sebagai representasi AurValue.
+pub const BASE_TX_FEE: AurValue = AurValue::from_atomic(BASE_TX_FEE_ATOMIC);
+
 /// Rekaman mutasi status berukuran tetap (fixed-width 161 byte).
 ///
 /// Dirancang secara linear untuk efisiensi penulisan sekuensial disk mekanis

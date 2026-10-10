@@ -4,7 +4,10 @@
 use std::path::Path;
 
 use ratu_aurion_primitives::crypto::AccountId;
-use ratu_aurion_primitives::record::MutationRecord;
+use ratu_aurion_primitives::record::{
+    MutationRecord, ANNUAL_INFLATION_BPS, BLOCKS_PER_YEAR, BPS_DENOMINATOR,
+    RECORD_KIND_BLOCK_REWARD, RECORD_KIND_FEE_BURN,
+};
 use ratu_aurion_primitives::value::AurValue;
 
 use crate::cold::ColdStore;
@@ -421,6 +424,124 @@ impl Keydir {
         segment_index: u32,
         offset: u64,
     ) -> Result<(), IndexError> {
+        if record.record_kind == RECORD_KIND_FEE_BURN {
+            if record.sender != AccountId::ZERO {
+                if self.cold_store.is_some() && !self.is_hot(&record.sender) {
+                    self.prefetch(&record.sender)?;
+                }
+                let sender_bucket_idx = Self::bucket_index_for(&record.sender);
+                let sender_entry_opt = {
+                    let bucket = &self.buckets[sender_bucket_idx];
+                    bucket
+                        .binary_search_by(|e| e.account.cmp(&record.sender))
+                        .ok()
+                        .map(|idx| bucket[idx])
+                };
+                if let Some(sender_entry) = sender_entry_opt {
+                    if record.sequence_number <= sender_entry.sequence_number {
+                        return Err(IndexError::StaleSequenceNumber);
+                    }
+                }
+                let sender_balance = sender_entry_opt.map_or(AurValue::ZERO, |e| e.balance);
+                let new_sender_balance = sender_balance
+                    .checked_sub(record.amount)
+                    .ok_or(IndexError::InsufficientBalance)?;
+
+                self.access_tick = self.access_tick.wrapping_add(1);
+                let current_tick = self.access_tick;
+
+                let sender_bucket = &mut self.buckets[sender_bucket_idx];
+                match sender_bucket.binary_search_by(|e| e.account.cmp(&record.sender)) {
+                    Ok(idx) => {
+                        let entry = &mut sender_bucket[idx];
+                        entry.balance = new_sender_balance;
+                        entry.sequence_number = record.sequence_number;
+                        entry.epoch = epoch;
+                        entry.segment_index = segment_index;
+                        entry.offset = offset;
+                        entry.flags = current_tick;
+                    }
+                    Err(insert_idx) => {
+                        sender_bucket.insert(
+                            insert_idx,
+                            CompactAccountEntry {
+                                account: record.sender,
+                                balance: new_sender_balance,
+                                sequence_number: record.sequence_number,
+                                epoch,
+                                offset,
+                                segment_index,
+                                flags: current_tick,
+                            },
+                        );
+                        self.total_accounts += 1;
+                    }
+                }
+            }
+
+            self.total_supply = self
+                .total_supply
+                .checked_sub(record.amount)
+                .ok_or(IndexError::ArithmeticOverflow)?;
+
+            if self.total_accounts > self.max_hot_capacity && self.cold_store.is_some() {
+                self.evict_if_needed()?;
+            }
+            return Ok(());
+        }
+
+        if record.record_kind == RECORD_KIND_BLOCK_REWARD {
+            let leader = &record.recipient;
+            if self.cold_store.is_some() && !self.is_hot(leader) {
+                self.prefetch(leader)?;
+            }
+
+            self.access_tick = self.access_tick.wrapping_add(1);
+            let current_tick = self.access_tick;
+
+            let b_idx = Self::bucket_index_for(leader);
+            let bucket = &mut self.buckets[b_idx];
+            match bucket.binary_search_by(|e| e.account.cmp(leader)) {
+                Ok(idx) => {
+                    let entry = &mut bucket[idx];
+                    entry.balance = entry
+                        .balance
+                        .checked_add(record.amount)
+                        .ok_or(IndexError::ArithmeticOverflow)?;
+                    entry.sequence_number = record.sequence_number;
+                    entry.epoch = epoch;
+                    entry.segment_index = segment_index;
+                    entry.offset = offset;
+                    entry.flags = current_tick;
+                }
+                Err(insert_idx) => {
+                    bucket.insert(
+                        insert_idx,
+                        CompactAccountEntry {
+                            account: *leader,
+                            balance: record.amount,
+                            sequence_number: record.sequence_number,
+                            epoch,
+                            offset,
+                            segment_index,
+                            flags: current_tick,
+                        },
+                    );
+                    self.total_accounts += 1;
+                }
+            }
+
+            self.total_supply = self
+                .total_supply
+                .checked_add(record.amount)
+                .ok_or(IndexError::ArithmeticOverflow)?;
+
+            if self.total_accounts > self.max_hot_capacity && self.cold_store.is_some() {
+                self.evict_if_needed()?;
+            }
+            return Ok(());
+        }
+
         // 0. Transparent paging: jika akun pengirim atau penerima dingin, tarik kembali ke RAM
         if self.cold_store.is_some() {
             if !self.is_hot(&record.sender) {
@@ -579,6 +700,263 @@ impl Keydir {
 
         // Catatan: total_supply tidak berubah karena mutasi transfer mengonservasi saldo total.
         Ok(())
+    }
+
+    /// Menerapkan mutasi transfer dengan deduksi biaya transaksi eksplisit (`base_fee`).
+    /// Akun pengirim dipotong `amount + base_fee`, sedangkan akun penerima dikreditkan `amount`.
+    pub fn apply_mutation_with_fee(
+        &mut self,
+        record: &MutationRecord,
+        base_fee: AurValue,
+        epoch: u64,
+        segment_index: u32,
+        offset: u64,
+    ) -> Result<(), IndexError> {
+        if base_fee == AurValue::ZERO {
+            return self.apply_mutation(record, epoch, segment_index, offset);
+        }
+
+        if self.cold_store.is_some() {
+            if !self.is_hot(&record.sender) {
+                self.prefetch(&record.sender)?;
+            }
+            if !self.is_hot(&record.recipient) {
+                self.prefetch(&record.recipient)?;
+            }
+        }
+
+        let sender_bucket_idx = Self::bucket_index_for(&record.sender);
+        let recipient_bucket_idx = Self::bucket_index_for(&record.recipient);
+
+        let sender_entry_opt = {
+            let bucket = &self.buckets[sender_bucket_idx];
+            bucket
+                .binary_search_by(|e| e.account.cmp(&record.sender))
+                .ok()
+                .map(|idx| bucket[idx])
+        };
+
+        if let Some(sender_entry) = sender_entry_opt {
+            if record.sequence_number <= sender_entry.sequence_number {
+                return Err(IndexError::StaleSequenceNumber);
+            }
+        }
+
+        let total_required = record
+            .amount
+            .checked_add(base_fee)
+            .ok_or(IndexError::ArithmeticOverflow)?;
+
+        let sender_balance = sender_entry_opt.map_or(AurValue::ZERO, |e| e.balance);
+        let new_sender_balance = sender_balance
+            .checked_sub(total_required)
+            .ok_or(IndexError::InsufficientBalance)?;
+
+        let recipient_entry_opt = {
+            let bucket = &self.buckets[recipient_bucket_idx];
+            bucket
+                .binary_search_by(|e| e.account.cmp(&record.recipient))
+                .ok()
+                .map(|idx| bucket[idx])
+        };
+
+        let recipient_balance = recipient_entry_opt.map_or(AurValue::ZERO, |e| e.balance);
+        let new_recipient_balance = recipient_balance
+            .checked_add(record.amount)
+            .ok_or(IndexError::ArithmeticOverflow)?;
+
+        self.access_tick = self.access_tick.wrapping_add(1);
+        let current_tick = self.access_tick;
+
+        let recipient_seq = recipient_entry_opt
+            .map_or(record.sequence_number, |e| {
+                e.sequence_number.max(record.sequence_number)
+            });
+
+        // Perbarui entri pengirim
+        {
+            let sender_bucket = &mut self.buckets[sender_bucket_idx];
+            match sender_bucket.binary_search_by(|e| e.account.cmp(&record.sender)) {
+                Ok(idx) => {
+                    let entry = &mut sender_bucket[idx];
+                    entry.balance = new_sender_balance;
+                    entry.sequence_number = record.sequence_number;
+                    entry.epoch = epoch;
+                    entry.segment_index = segment_index;
+                    entry.offset = offset;
+                    entry.flags = current_tick;
+                }
+                Err(insert_idx) => {
+                    sender_bucket.insert(
+                        insert_idx,
+                        CompactAccountEntry {
+                            account: record.sender,
+                            balance: new_sender_balance,
+                            sequence_number: record.sequence_number,
+                            epoch,
+                            offset,
+                            segment_index,
+                            flags: current_tick,
+                        },
+                    );
+                    self.total_accounts += 1;
+                }
+            }
+        }
+
+        // Perbarui entri penerima
+        {
+            let recipient_bucket = &mut self.buckets[recipient_bucket_idx];
+            match recipient_bucket.binary_search_by(|e| e.account.cmp(&record.recipient)) {
+                Ok(idx) => {
+                    let entry = &mut recipient_bucket[idx];
+                    entry.balance = new_recipient_balance;
+                    entry.sequence_number = recipient_seq;
+                    entry.epoch = epoch;
+                    entry.segment_index = segment_index;
+                    entry.offset = offset;
+                    entry.flags = current_tick;
+                }
+                Err(insert_idx) => {
+                    recipient_bucket.insert(
+                        insert_idx,
+                        CompactAccountEntry {
+                            account: record.recipient,
+                            balance: new_recipient_balance,
+                            sequence_number: recipient_seq,
+                            epoch,
+                            offset,
+                            segment_index,
+                            flags: current_tick,
+                        },
+                    );
+                    self.total_accounts += 1;
+                }
+            }
+        }
+
+        if self.total_accounts > self.max_hot_capacity && self.cold_store.is_some() {
+            self.evict_if_needed()?;
+        }
+
+        Ok(())
+    }
+
+    /// Menghitung reward blok dinamis berbasis pasokan total terkini (`Keydir.total_supply`).
+    ///
+    /// Rumus:
+    /// `current_supply * ANNUAL_INFLATION_BPS / (BLOCKS_PER_YEAR * BPS_DENOMINATOR)`
+    #[inline]
+    pub fn compute_block_reward(&self) -> AurValue {
+        let current_supply = self.total_supply.to_atomic();
+        let denominator = match BLOCKS_PER_YEAR.checked_mul(BPS_DENOMINATOR) {
+            Some(d) if d > 0 => d,
+            _ => return AurValue::ZERO,
+        };
+        let numerator = match current_supply.checked_mul(ANNUAL_INFLATION_BPS) {
+            Some(n) => n,
+            None => return AurValue::ZERO,
+        };
+        AurValue::from_atomic(numerator / denominator)
+    }
+
+    /// Menyelesaikan alokasi reward blok dan pembakaran biaya moneter ke akun leader:
+    /// - Mengkreditkan `block_reward + fee_tip` ke akun leader.
+    /// - Memperbarui `self.total_supply`: `+ block_reward - fee_burned`.
+    /// - Memastikan seluruh pembaruan saldo menggunakan operasi checked tanpa panic.
+    pub fn finalize_block_rewards(
+        &mut self,
+        leader: &AccountId,
+        block_reward: AurValue,
+        fee_tip: AurValue,
+        fee_burned: AurValue,
+        location: AccountLocation,
+    ) -> Result<(), IndexError> {
+        if self.cold_store.is_some() && !self.is_hot(leader) {
+            self.prefetch(leader)?;
+        }
+
+        self.access_tick = self.access_tick.wrapping_add(1);
+        let current_tick = self.access_tick;
+
+        let total_leader_credit = block_reward
+            .checked_add(fee_tip)
+            .ok_or(IndexError::ArithmeticOverflow)?;
+
+        let b_idx = Self::bucket_index_for(leader);
+        let bucket = &mut self.buckets[b_idx];
+        match bucket.binary_search_by(|e| e.account.cmp(leader)) {
+            Ok(idx) => {
+                let entry = &mut bucket[idx];
+                entry.balance = entry
+                    .balance
+                    .checked_add(total_leader_credit)
+                    .ok_or(IndexError::ArithmeticOverflow)?;
+                entry.sequence_number = location.sequence_number;
+                entry.epoch = location.epoch;
+                entry.segment_index = location.segment_idx;
+                entry.offset = location.offset;
+                entry.flags = current_tick;
+            }
+            Err(insert_idx) => {
+                bucket.insert(
+                    insert_idx,
+                    CompactAccountEntry {
+                        account: *leader,
+                        balance: total_leader_credit,
+                        sequence_number: location.sequence_number,
+                        epoch: location.epoch,
+                        offset: location.offset,
+                        segment_index: location.segment_idx,
+                        flags: current_tick,
+                    },
+                );
+                self.total_accounts += 1;
+            }
+        }
+
+        // Dinamisasi pasokan total: + block_reward - fee_burned
+        let updated_supply = self
+            .total_supply
+            .checked_add(block_reward)
+            .ok_or(IndexError::ArithmeticOverflow)?
+            .checked_sub(fee_burned)
+            .ok_or(IndexError::ArithmeticOverflow)?;
+        self.total_supply = updated_supply;
+
+        if self.total_accounts > self.max_hot_capacity && self.cold_store.is_some() {
+            self.evict_if_needed()?;
+        }
+
+        Ok(())
+    }
+
+    /// Menghitung jumlah akumulasi saldo seluruh akun pada 256 bucket RAM
+    /// untuk verifikasi ketat kesetaraan invarian moneter terhadap `total_supply`.
+    #[inline]
+    pub fn sum_bucket_balances(&self) -> AurValue {
+        let mut sum = AurValue::ZERO;
+        for bucket in self.buckets.iter() {
+            for entry in bucket.iter() {
+                if let Some(next) = sum.checked_add(entry.balance) {
+                    sum = next;
+                }
+            }
+        }
+        sum
+    }
+
+    /// Menghasilkan intisari BLAKE3 atas seluruh rekaman 80-byte entri yang tersimpan
+    /// secara berurutan deterministik melintasi 256 partisi bucket.
+    #[inline]
+    pub fn state_digest(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        for bucket in self.buckets.iter() {
+            for entry in bucket.iter() {
+                hasher.update(&entry.to_bytes());
+            }
+        }
+        *hasher.finalize().as_bytes()
     }
 
     /// Membaca dan merekonstruksi indeks dari berkas segmen log di disk.

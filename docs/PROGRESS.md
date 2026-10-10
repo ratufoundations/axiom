@@ -2,6 +2,54 @@
 
 ## Completed Tickets
 
+### Ticket OPT-ENGINE-FEE-01: Dynamic Fee Burn & Block Reward Emission
+- **Target Subsystem**: `crates/ratu-aurion-primitives` (`src/record.rs`), `crates/ratu-aurion-index` (`src/keydir.rs`), `crates/ratu-aurion-engine` (`src/pipeline.rs`, `src/error.rs`, `tests/test_fee_reward.rs`), `crates/ratu-aurion-storage` (`src/writer.rs`, `src/scanner.rs`), `task-register.md`
+- **Status**: Validated & Merged
+- **Specification**: In-tree pure integer monetary fee burn and dynamic inflation emission engine enforcing fixed 161-byte `MutationRecord` binary layouts across all variants (`0x01` Transfer, `0x02` Fee Burn, `0x03` Block Reward), deterministic basis point calculations (`BPS_DENOMINATOR = 10_000`, `7,000` burn BPS, `3,000` tip BPS), pure integer dynamic annual inflation (`500` BPS over `31,536,000` blocks per year), Stage 1 fail-fast verifier check for `amount + BASE_TX_FEE`, Stage 2 sequencer fee accumulation and slot commit, and bit-for-bit replay conservation where `Keydir.total_supply` strictly matches the sum of all bucket balances.
+
+#### Architectural & Technical Invariants
+1. **Deterministic Basis Points Fee Split (`BASE_TX_FEE = 0.001 AUR`)**:
+   - `BASE_TX_FEE_ATOMIC = 10_000_000` (10^7 atomic units = 0.001 AUR).
+   - `DEFAULT_BURN_RATIO_BPS = 7_000` (70% burn).
+   - `DEFAULT_TIP_RATIO_BPS = 3_000` (30% tip).
+   - Pure integer split:
+     $$\text{FeeBurn} = \frac{\text{BASE\_TX\_FEE\_ATOMIC} \times 7,000}{10,000} = 7,000,000 \text{ atomic units (0.0007 AUR)}$$
+     $$\text{FeeTip} = \text{BASE\_TX\_FEE\_ATOMIC} - \text{FeeBurn} = 3,000,000 \text{ atomic units (0.0003 AUR)}$$
+   - Absolutely zero float conversions (`f32`, `f64` forbidden).
+2. **Pure Integer Dynamic Annual Inflation Formula**:
+   - `ANNUAL_INFLATION_BPS = 500` (5.00% annual inflation).
+   - `BLOCKS_PER_YEAR = 31_536_000` (assuming 1 block per second).
+   - Reward per slot dynamically computed from `Keydir.total_supply`:
+     $$\text{BlockReward} = \frac{\text{Keydir.total\_supply} \times \text{ANNUAL\_INFLATION\_BPS}}{\text{BLOCKS\_PER\_YEAR} \times \text{BPS\_DENOMINATOR}}$$
+     $$\text{Denominator} = 31,536,000 \times 10,000 = 315,360,000,000$$
+   - Non-zero integer atomic units dynamically credited to slot validator leader.
+3. **Fixed 161-Byte Binary Record Taxonomy (`RECORD_SIZE = 161`)**:
+   - `0x01` (`RECORD_KIND_TRANSFER`): Standard user transfer (`sender -> recipient`, `amount`).
+   - `0x02` (`RECORD_KIND_FEE_BURN`): Synthetic fee burn record (`sender -> AccountId::ZERO`, `amount = fee_burned`, signature `[0x02; 64]`).
+   - `0x03` (`RECORD_KIND_BLOCK_REWARD`): Synthetic block reward emission record (`AccountId::ZERO -> leader`, `amount = block_reward + fee_tip`, signature `[0x03; 64]`).
+   - All variants strictly preserve identical 161-byte fixed-width framing and non-zero signature checks in `SegmentWriter` and `SegmentScanner`.
+4. **Conservation of Monetary Supply Invariant**:
+   - Dynamic global supply update rule:
+     $$\Delta \text{Keydir.total\_supply} = +\text{BlockReward} - \text{FeeBurn}$$
+   - State verification checkpoint invariant:
+     $$\text{Keydir.total\_supply} \equiv \sum_{b=0}^{255} \sum_{e \in \text{Bucket}_b} e.\text{balance}$$
+   - Under net deflation ($\text{FeeBurn} > \text{BlockReward}$), global total supply decreases cleanly without arithmetic underflow and persists bit-for-bit across snapshot serializations (`save_checkpoint` / `load_checkpoint`).
+5. **Stage 1 Fail-Fast Verifier Check**:
+   - Stage 1 parallel verifiers assert `sender_balance >= amount + BASE_TX_FEE`.
+   - Transfers lacking adequate balance for the transfer amount plus fee reject immediately at Stage 1 with `EngineError::InsufficientBalance { requested, available }` without polluting Stage 2 queue or disk storage.
+
+#### Monetary Integration Test Verification Metrics
+- **Test Suite**: `crates/ratu-aurion-engine/tests/test_fee_reward.rs`
+- **Execution Latency**: 0.89s (5/5 integration tests passing)
+- **Verified Test Scenarios**:
+  1. `test_fee_deduction_and_burn_ratio`: Verified sender deducted exactly 10.001 AUR (89.999 AUR remaining), recipient credited 10 AUR, fee split 70% burn (7,000,000 atomic) and 30% tip (3,000,000 atomic).
+  2. `test_block_reward_dynamic_inflation_and_supply_update`: Initial supply 100,000,000 AUR; block reward computed to non-zero atomic units; slot commit credits `BlockReward + Tip` to leader; total supply increases by `BlockReward - FeeBurn`; sum of 256 bucket balances strictly equals `Keydir.total_supply`.
+  3. `test_net_deflation_scenario_high_burn`: 50,000 transactions simulated where aggregate `FeeBurn (35 AUR) > BlockReward`; total supply decreases cleanly; checkpoint snapshot write and reload verifies identical reduced total supply and bucket sums.
+  4. `test_fail_fast_insufficient_balance_for_transfer_plus_fee`: Sender with exactly 10 AUR attempting to transfer 10 AUR rejected fail-fast with `InsufficientBalance { requested: 10.001 AUR, available: 10 AUR }` at Stage 1 verifiers; subsequent valid 5 AUR transfer commits cleanly at offset 42.
+  5. `test_replay_segment_with_synthetic_burn_and_reward_records`: Written log segment containing 10 transfers, 10 synthetic fee burns, and 1 block reward replayed into fresh `Keydir`; state hash BLAKE3 digest, leader balance, and dynamic total supply verified 100% bit-for-bit identical.
+
+---
+
 ### Ticket PERF-RELEASE-01: Production Release Optimization & Hardware Saturation
 - **Target Subsystem**: `Cargo.toml`, `crates/ratu-aurion-engine` (`tests/test_perf_release.rs`), `bin/ratu-aurion-node` (`tests/test_cluster_perf.rs`)
 - **Status**: Validated & Merged

@@ -49,6 +49,7 @@ fn is_valid_committed_record(buf: &[u8; RECORD_SIZE]) -> bool {
     let record_kind = buf[16];
     if record_kind != ratu_aurion_primitives::record::RECORD_KIND_TRANSFER
         && record_kind != ratu_aurion_primitives::record::RECORD_KIND_SYSTEM_NOTIF
+        && record_kind != ratu_aurion_primitives::record::RECORD_KIND_BLOCK_REWARD
     {
         return false;
     }

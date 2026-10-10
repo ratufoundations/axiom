@@ -34,6 +34,10 @@ pub enum EngineError {
     PipelineQueueFull,
     /// Thread worker pipeline mengalami panik yang tidak diharapkan.
     WorkerThreadPanicked,
+    /// Overflow aritmatika saat kalkulasi biaya transaksi dan pembakaran.
+    FeeCalculationOverflow,
+    /// Overflow aritmatika saat kalkulasi reward blok inflasi.
+    RewardCalculationOverflow,
 }
 
 impl fmt::Display for EngineError {
@@ -60,6 +64,8 @@ impl fmt::Display for EngineError {
             Self::PipelineChannelClosed => write!(f, "Pipeline channel closed"),
             Self::PipelineQueueFull => write!(f, "Pipeline bounded queue is full"),
             Self::WorkerThreadPanicked => write!(f, "Pipeline worker thread panicked"),
+            Self::FeeCalculationOverflow => write!(f, "Arithmetic overflow during fee calculation"),
+            Self::RewardCalculationOverflow => write!(f, "Arithmetic overflow during block reward calculation"),
         }
     }
 }

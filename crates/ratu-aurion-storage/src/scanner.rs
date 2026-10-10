@@ -11,7 +11,10 @@ use std::path::Path;
 
 use ratu_aurion_primitives::{
     crypto::Hash,
-    record::{MutationRecord, RECORD_KIND_SYSTEM_NOTIF, RECORD_KIND_TRANSFER, RECORD_SIZE},
+    record::{
+        MutationRecord, RECORD_KIND_BLOCK_REWARD, RECORD_KIND_SYSTEM_NOTIF, RECORD_KIND_TRANSFER,
+        RECORD_SIZE,
+    },
 };
 use ed25519_dalek::Verifier;
 
@@ -161,9 +164,10 @@ impl SegmentScanner {
                 });
             }
 
-            // Invarian 3: record_kind == RECORD_KIND_TRANSFER || record_kind == RECORD_KIND_SYSTEM_NOTIF
+            // Invarian 3: record_kind == RECORD_KIND_TRANSFER || record_kind == RECORD_KIND_SYSTEM_NOTIF || record_kind == RECORD_KIND_BLOCK_REWARD
             if record.record_kind != RECORD_KIND_TRANSFER
                 && record.record_kind != RECORD_KIND_SYSTEM_NOTIF
+                && record.record_kind != RECORD_KIND_BLOCK_REWARD
             {
                 return Err(StorageError::StructuralInvariantViolation {
                     offset: current_offset,
