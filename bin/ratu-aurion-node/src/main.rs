@@ -7,8 +7,10 @@
 //! konsensus pembuktian kuorum, dan server TCP P2P.
 
 pub mod config;
+pub mod rpc;
 pub mod server;
 pub mod telemetry;
+pub mod ws;
 
 use std::fs;
 use std::sync::mpsc;

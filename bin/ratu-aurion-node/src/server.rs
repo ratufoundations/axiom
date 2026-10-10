@@ -1,7 +1,7 @@
 //! Modul server jaringan P2P (NodeServer) dan penanganan pipeline pesan.
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, RwLock};
@@ -34,6 +34,8 @@ pub struct NodeServer {
     pub active_certificate: Arc<RwLock<Option<QuorumCertificate>>>,
     /// Kolektor metrik telemetri simpul bebas-kunci.
     pub telemetry: Arc<crate::telemetry::NodeTelemetryCollector>,
+    /// Hub langganan mutasi WebSocket aktif.
+    pub ws_hub: Arc<crate::ws::WsSubscriptionHub>,
 }
 
 impl NodeServer {
@@ -67,6 +69,7 @@ impl NodeServer {
             peer_table,
             active_certificate: Arc::new(RwLock::new(None)),
             telemetry,
+            ws_hub: Arc::new(crate::ws::WsSubscriptionHub::new()),
         }
     }
 
@@ -237,6 +240,18 @@ impl NodeServer {
                     self.telemetry
                         .disk_offset
                         .store(offset, std::sync::atomic::Ordering::Relaxed);
+
+                    // Siarkan ke WebSocket subscribers aktif
+                    let ws_payload = format!(
+                        r#"{{"jsonrpc":"2.0","method":"aur_subscription","params":{{"result":{{"epoch":{},"sequence_number":{},"disk_offset":{},"sender":"0x{}","recipient":"0x{}","amount":"{}"}}}}}}"#,
+                        record.epoch,
+                        record.sequence_number,
+                        offset,
+                        crate::rpc::hex_encode(record.sender.as_bytes()),
+                        crate::rpc::hex_encode(record.recipient.as_bytes()),
+                        record.amount.to_atomic(),
+                    );
+                    self.ws_hub.broadcast(&ws_payload);
                 }
 
                 let reply = match res {
@@ -259,5 +274,124 @@ impl NodeServer {
         }
 
         Ok(())
+    }
+
+    /// Menyerahkan transaksi mutasi langsung ke engine simpul dan menyiarkan notifikasi.
+    pub fn submit_transaction(
+        &self,
+        record: &ratu_aurion_primitives::record::MutationRecord,
+    ) -> Result<u64, ratu_aurion_engine::error::EngineError> {
+        let offset = self
+            .engine
+            .write()
+            .map_err(|e| {
+                ratu_aurion_engine::error::EngineError::IoError(std::io::Error::other(format!("{e}")))
+            })?
+            .submit_transaction(record)?;
+
+        self.telemetry
+            .total_tx_committed
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.telemetry
+            .disk_offset
+            .store(offset, std::sync::atomic::Ordering::Relaxed);
+
+        let ws_payload = format!(
+            r#"{{"jsonrpc":"2.0","method":"aur_subscription","params":{{"result":{{"epoch":{},"sequence_number":{},"disk_offset":{},"sender":"0x{}","recipient":"0x{}","amount":"{}"}}}}}}"#,
+            record.epoch,
+            record.sequence_number,
+            offset,
+            crate::rpc::hex_encode(record.sender.as_bytes()),
+            crate::rpc::hex_encode(record.recipient.as_bytes()),
+            record.amount.to_atomic(),
+        );
+        self.ws_hub.broadcast(&ws_payload);
+
+        Ok(offset)
+    }
+
+    /// Melakukan bind socket TCP listener untuk gateway JSON-RPC & WebSocket jika dikonfigurasi.
+    pub fn bind_rpc(&self) -> Result<Option<TcpListener>, NetworkError> {
+        if let Some(addr) = self.config.rpc_addr {
+            let listener = TcpListener::bind(addr)?;
+            listener.set_nonblocking(true)?;
+            Ok(Some(listener))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Menjalankan loop pendengar gateway JSON-RPC & WebSocket dan memproses koneksi klien.
+    pub fn run_rpc_listener(
+        &self,
+        listener: TcpListener,
+        shutdown_signal: Receiver<()>,
+    ) -> Result<(), NetworkError> {
+        loop {
+            // 1. Periksa sinyal shutdown
+            match shutdown_signal.try_recv() {
+                Ok(()) | Err(TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Empty) => {}
+            }
+
+            // 2. Menerima koneksi baru non-blocking
+            match listener.accept() {
+                Ok((stream, _peer_addr)) => {
+                    let server = self.clone();
+                    thread::spawn(move || {
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(Duration::from_millis(2000)));
+                        let _ = stream.set_write_timeout(Some(Duration::from_millis(2000)));
+                        server.handle_rpc_stream(stream);
+                    });
+                }
+                Err(ref e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => {
+                    return Err(NetworkError::IoError(e));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Menangani satu koneksi masuk pada port RPC/WebSocket Gateway.
+    pub fn handle_rpc_stream(&self, mut stream: TcpStream) {
+        let (method, path, headers, body_prefix) = match crate::rpc::read_http_headers(&mut stream) {
+            Ok(res) => res,
+            Err(_) => return,
+        };
+
+        let is_ws = path == "/ws"
+            || headers
+                .get("upgrade")
+                .map(|val| val.to_lowercase().contains("websocket"))
+                .unwrap_or(false);
+
+        if is_ws {
+            if let Some(key) = headers.get("sec-websocket-key") {
+                let _ = crate::ws::handle_ws_connection(stream, key, &self.ws_hub);
+            } else {
+                let bad_req = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
+                let _ = stream.write_all(bad_req.as_bytes());
+            }
+        } else if method == "POST" {
+            let _ = crate::rpc::handle_http_rpc_request(
+                stream,
+                headers,
+                body_prefix,
+                &self.engine,
+                &self.telemetry,
+                &self.ws_hub,
+            );
+        } else {
+            let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+            let _ = stream.write_all(not_found.as_bytes());
+        }
     }
 }

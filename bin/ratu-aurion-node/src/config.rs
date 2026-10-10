@@ -21,6 +21,8 @@ pub struct NodeConfig {
     pub validator_key: SigningKey,
     /// Path berkas Unix Domain Socket untuk telemetri IPC (opsional).
     pub ipc_socket: Option<PathBuf>,
+    /// Alamat socket TCP lokal untuk gateway JSON-RPC & WebSocket (opsional).
+    pub rpc_addr: Option<SocketAddr>,
 }
 
 impl NodeConfig {
@@ -39,7 +41,14 @@ impl NodeConfig {
             epoch,
             validator_key,
             ipc_socket: None,
+            rpc_addr: None,
         }
+    }
+
+    /// Menentukan alamat listening RPC/WebSocket gateway (opsional).
+    pub fn with_rpc_addr(mut self, addr: SocketAddr) -> Self {
+        self.rpc_addr = Some(addr);
+        self
     }
 
     /// Menghasilkan konfigurasi bawaan yang aman untuk pengujian.
@@ -56,6 +65,7 @@ impl NodeConfig {
             epoch: 1,
             validator_key,
             ipc_socket: None,
+            rpc_addr: None,
         }
     }
 
@@ -74,6 +84,9 @@ impl NodeConfig {
         let mut epoch: u64 = 1;
         let mut seed_byte: u8 = 0x01;
         let mut ipc_socket: Option<PathBuf> = None;
+        let mut rpc_addr: Option<SocketAddr> = Some(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9545),
+        );
 
         let args_vec: Vec<String> = args.into_iter().collect();
         let mut i = 0;
@@ -102,6 +115,17 @@ impl NodeConfig {
                         .parse::<SocketAddr>()
                         .map_err(|e| format!("Invalid --listen address: {e}"))?;
                 }
+                "--rpc-addr" => {
+                    i = i.checked_add(1).ok_or("Arg index overflow")?;
+                    if i >= args_vec.len() {
+                        return Err("Missing argument for --rpc-addr".to_string());
+                    }
+                    rpc_addr = Some(
+                        args_vec[i]
+                            .parse::<SocketAddr>()
+                            .map_err(|e| format!("Invalid --rpc-addr address: {e}"))?,
+                    );
+                }
                 "--epoch" => {
                     i = i.checked_add(1).ok_or("Arg index overflow")?;
                     if i >= args_vec.len() {
@@ -128,7 +152,7 @@ impl NodeConfig {
                     ipc_socket = Some(PathBuf::from(&args_vec[i]));
                 }
                 "--help" | "-h" => {
-                    return Err("Usage: ratu-aurion-node [--data-dir PATH] [--archive-dir PATH] [--listen IP:PORT] [--epoch NUM] [--seed-byte U8] [--ipc-socket PATH]".to_string());
+                    return Err("Usage: ratu-aurion-node [--data-dir PATH] [--archive-dir PATH] [--listen IP:PORT] [--rpc-addr IP:PORT] [--epoch NUM] [--seed-byte U8] [--ipc-socket PATH]".to_string());
                 }
                 unknown => {
                     return Err(format!("Unknown argument: {unknown}"));
@@ -148,6 +172,7 @@ impl NodeConfig {
             epoch,
             validator_key,
             ipc_socket,
+            rpc_addr,
         })
     }
 

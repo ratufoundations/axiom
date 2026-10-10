@@ -2,6 +2,52 @@
 
 ## Completed Tickets
 
+### Ticket GATEWAY-RPC-01: JSON-RPC & WebSocket Gateway Interface
+- **Target Subsystem**: `bin/ratu-aurion-node` (`src/rpc.rs`, `src/ws.rs`, `src/server.rs`, `src/lib.rs`, `tests/test_rpc_gateway.rs`)
+- **Status**: Validated & Merged
+- **Specification**: Public access gateway interface for web wallets, CLI clients, and the `ratuaurion.store` portal directly into `ratu-aurion-node`. In-tree minimal HTTP/1.1 parser (RFC 7230) with 64 KB (`MAX_RPC_BODY_SIZE = 65_536` bytes) payload limit, deterministic JSON-RPC 2.0 dispatcher, in-tree RFC 6455 WebSocket engine with pure-integer SHA-1 and Base64 encoder, and pub/sub mutation streaming.
+
+#### Architectural & Technical Invariants
+1. **In-Tree HTTP/1.1 Parser & Buffer Protection**:
+   - RFC 7230 compliant minimal parser reading request lines, headers, and bounded payloads.
+   - Strict `MAX_RPC_BODY_SIZE = 65_536` bytes (64 KB) limit mitigating buffer bloat and memory exhaustion DoS attacks.
+   - Explicit socket timeouts (`2,000` ms read/write guards) preventing hung threads on malicious or inactive client connections.
+2. **Deterministic JSON-RPC 2.0 Dispatcher**:
+   - Pure-integer, zero-dependency in-tree JSON parser (`JsonValue`) rejecting floating-point and scientific notation types.
+   - Handled Methods:
+     - `aur_chainId`: Returns `"0x52415552"` (`RAUR`).
+     - `aur_blockHeight`: Returns `{ "epoch": u64, "sequence_number": u64 }`.
+     - `aur_getBalance`: Parses 32-byte hex `AccountId`, returns atomic unit representation as string.
+     - `aur_getAccountLocation`: Returns `{ "epoch": u64, "segment_index": u32, "offset": u64, "sequence_number": u64 }`.
+     - `aur_sendRawTransaction`: Parses 161-byte hex string into `MutationRecord`, submits to engine storage/index pipeline, updates telemetry, broadcasts to WebSocket subscribers, and returns `{ "disk_offset": u64, "sequence_number": u64 }`.
+   - Error Codes (JSON-RPC 2.0 Standard):
+     - `-32700`: Parse error (invalid JSON syntax).
+     - `-32600`: Invalid request (malformed request object or payload > 64 KB).
+     - `-32601`: Method not found.
+     - `-32602`: Invalid params (invalid hex, address length mismatch, wrong record size).
+     - `-32000`: Execution error (e.g., `StaleSequenceNumber`, `InsufficientBalance`).
+3. **In-Tree WebSocket RFC 6455 Engine**:
+   - Pure-integer FIPS 180-1 SHA-1 algorithm (~40 lines of code) and RFC 4648 Base64 encoder without external dependencies.
+   - Handshake computation: `Sec-WebSocket-Accept = Base64(SHA1(client_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))`.
+   - Framing: Supports masked client frames and unmasked server-to-client text frames (Opcode `0x1`).
+   - Pub/Sub Hub (`WsSubscriptionHub`): Thread-safe subscriber management broadcasting `newMutations` events in real-time upon successful engine commit.
+4. **Zero-Dependency & Absolute Safety Compliance**:
+   - Strict `#![forbid(unsafe_code)]` enforced across all crates.
+   - Exclusively `std::net`, `std::sync`, and in-tree workspace crates (zero tokio, zero hyper, zero serde_json).
+   - Zero floating-point types (`f32`, `f64` forbidden).
+
+#### Gateway Integration Test Verification Metrics
+- **Test Suite**: `bin/ratu-aurion-node/tests/test_rpc_gateway.rs`
+- **Execution Latency**: 0.28s (5/5 integration tests passing)
+- **Verified Test Scenarios**:
+  1. `test_rpc_chain_id_and_height`: Ephemeral port bootstrap, `aur_chainId` returning `"0x52415552"`, `aur_blockHeight` returning epoch and committed sequence number.
+  2. `test_rpc_get_balance_and_account_location`: Account seeded with 100 AUR ($10^{12}$ atomic units), exact balance query, disk segment location query.
+  3. `test_rpc_send_raw_transaction_success_and_error`: 161-byte signed transaction ingestion, disk offset verification, balance update propagation, and stale sequence number rejection with error code `-32000`.
+  4. `test_rpc_reject_invalid_json_and_oversized_payload`: Rejection of malformed JSON with `-32700`, rejection of >64 KB payload with `-32600`.
+  5. `test_websocket_handshake_and_subscription_stream`: Handshake `101 Switching Protocols`, client subscription to `newMutations`, real-time text frame reception with committed mutation details upon transaction submission.
+
+---
+
 ### Ticket NET-CLUSTER-01: Multi-Node Local Validator Testnet & Consensus Gossip
 - **Target Subsystem**: `crates/ratu-aurion-network`, `bin/ratu-aurion-node`
 - **Status**: Validated & Merged

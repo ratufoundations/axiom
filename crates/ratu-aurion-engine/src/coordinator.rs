@@ -197,7 +197,7 @@ impl EngineCoordinator {
         self.keydir.seed_account(
             account,
             balance,
-            AccountLocation::new(0, 0, 0, 0),
+            AccountLocation::new(self.current_epoch, self.current_segment_idx, 0, 0),
         );
     }
 
