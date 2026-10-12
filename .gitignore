@@ -5,6 +5,10 @@ AGENTS.md
 logs/*
 !logs/.gitkeep
 
+# Environment variables
+.env
+.env*.local
+
 # Web app exclusions (FE-EXPLORER-01)
 web/node_modules/
 web/.next/
